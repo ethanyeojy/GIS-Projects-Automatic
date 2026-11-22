@@ -10,7 +10,7 @@ from datetime import datetime
 from . import catalog, connectors
 from .feed import write_json_atomic
 
-APP_VERSION = "0.1.0-prototype"
+APP_VERSION = "0.2.0"  # the page checks this: if the server is older than the page, it tells the user to restart
 
 
 def _w(job, rel, text):
@@ -24,19 +24,57 @@ def _mb(b):
     return f"{b / 1e6:.2f} MB" if b else "0 MB"
 
 
+def _fetch_story_images(job, p):
+    """Download the project's credited photos into images/originals and attach them to story sections."""
+    import re
+    from . import net
+    cs = p.get("case_study") or {}
+    order = ["cover", "q1", "q2", "q3", "conclusion"]
+    out, inline_i = [], 0
+    os.makedirs(job.path("images", "originals"), exist_ok=True)
+    for im in cs.get("images", []):
+        if im["role"] == "cover":
+            sec = "cover"
+        else:
+            inline_i += 1
+            sec = order[min(inline_i, len(order) - 1)]
+        name = f"{sec}_" + re.sub(r"[^A-Za-z0-9]+", "-", im["alt"])[:40].strip("-").lower() + ".jpg"
+        target = job.path("images", "originals", name)
+        status = "downloaded"
+        try:
+            if not os.path.exists(target):
+                st, _, body = net.request(im["url"], timeout=90, retries=2)
+                with open(target, "wb") as f:
+                    f.write(body)
+        except Exception as e:  # noqa: BLE001 - keep the credit + source link so the image can be fetched by hand
+            status = f"download failed ({str(e)[:80]}) — use the source page link"
+            job.log(f"Image not downloaded ({name}): {e}")
+        out.append({"file": "images/originals/" + name if status == "downloaded" else "", "section": sec, "alt": im["alt"],
+                    "caption": im["alt"], "credit": f"{im['credit']} — {im['licence']} — via Wikimedia Commons",
+                    "licence": im["licence"], "source_page": im["page"], "status": status})
+    return out
+
+
 def render_outline_md(outline):
     lines = [f"# StoryMap outline — {outline.get('title', '')}", "",
              "> Planning outline. This is NOT a live ArcGIS StoryMap, and no section contains analysis results unless you wrote them.", ""]
     for s in outline["sections"]:
         lines += [f"## {s['title']}", ""]
-        if s.get("text", "").strip():
+        if s.get("parts"):
+            for part in s["parts"]:
+                lines += [f"**{part['label']}**", "", (part["text"].strip() or "_(to be written)_"), ""]
+        elif s.get("text", "").strip():
             lines += [s["text"].strip(), ""]
         else:
             lines += ["_(empty — to be written)_", ""]
+        if s.get("layout"):
+            lines += [f"*StoryMaps layout:* {s['layout']}", ""]
         lines += [f"*Suggested content:* {s.get('suggest', '')}", ""]
+        for ph in s.get("placeholders", []):
+            lines += [f"- **[{ph['kind'].upper()} PLACEHOLDER — illustration only]** {ph['label']} — build this from your own analysis"]
         for im in outline.get("images", []):
             if im.get("section") == s["id"]:
-                lines += [f"- Image: `{im['file']}` — caption: {im.get('caption') or '(none)'}; credit: {im.get('credit') or '(none)'}; alt text: {im.get('alt') or '(MISSING)'}"]
+                lines += [f"- Image: `{im.get('file') or im.get('source_page')}` — caption: {im.get('caption') or '(none)'}; credit: {im.get('credit') or '(none)'}; alt text: {im.get('alt') or '(MISSING)'}"]
         lines.append("")
     return "\n".join(lines)
 
@@ -67,6 +105,16 @@ def write_all(job):
         w.writeheader()
         w.writerows(rows)
 
+    # export manifest: every file a student can open, with its format and coordinate system (and why any format was not made)
+    with open(job.path("metadata", "export_manifest.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["dataset_id", "format", "file", "records", "bytes", "coordinate_system", "status"])
+        for ds in ds_ids:
+            ex = d.get("exports", {}).get(ds) or {}
+            for e in ex.get("written", []):
+                w.writerow([ds, e["format"], e["file"], e["records"], e["bytes"], e["crs"], "written"])
+            for s in ex.get("skipped", []):
+                w.writerow([ds, s["format"], "", "", "", "", "NOT created: " + s["reason"]])
     # data dictionary
     with open(job.path("metadata", "data_dictionary.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -160,14 +208,15 @@ def write_all(job):
     _w(job, "workflows/analysis_guide.md", "\n".join(g))
 
     # storymap
-    sections = catalog.storymap_sections(p)
+    story_images = _fetch_story_images(job, p)  # must exist before the credits text below uses it
+    sections = catalog.storymap_sections(p, {"rows": rows, "period": job.plan.get("period"), "region": job.region})
     srcs = "\n".join(f"- {r['name']} — {r['publisher']}. Retrieved {r['retrieved_at'][:10]}. {r['landing_url']}" for r in rows)
+    photo_credits = "\n".join(f"- Photo ({im['section']}): {im['credit']} — {im['source_page']}" for im in story_images if im.get("source_page"))
     for s in sections:
         if s["id"] == "sources":
-            s["text"] = srcs
-        if s["id"] == "data_methods":
-            s["text"] = "\n".join(f"- {r['name']} ({r['publisher']}): {r['records']} records retrieved {r['retrieved_at'][:10]}." for r in rows)
-    outline = {"title": p["title"], "sections": sections, "images": []}
+            s["text"] = srcs + ("\n\nPhotos:\n" + photo_credits if photo_credits else "")
+            s["parts"] = [{"label": "Sources", "text": s["text"]}]
+    outline = {"title": p["title"], "sections": sections, "images": story_images, "question": p["question"], "purpose": p.get("purpose", "")}
     write_json_atomic(job.path("storymap", "outline.json"), outline)
     _w(job, "storymap/outline.md", render_outline_md(outline))
     os.makedirs(job.path("images", "originals"), exist_ok=True)
@@ -179,6 +228,27 @@ def write_all(job):
           "## Limitations", *["- " + x for x in p["limitations"]], "", "## Conclusion", "[TO WRITE]"]
     _w(job, "storymap/draft_content.md", "\n".join(dc))
 
+    # ArcGIS Online publishing checklist built from this job's real files
+    ao = [f"# Final map — publish to ArcGIS Online — {p['title']}", "",
+          "Generated from the files this tool actually wrote. Your **result** layers (after analysis) are what you publish; these lists show what you can add straight away.", "",
+          "## Files ready to add (Content > New item > Your device)", "",
+          "| Dataset | File | Format | Size | Map Viewer 'Add layer from file' (≈10 MB) |", "|---|---|---|---|---|"]
+    for ds in ds_ids:
+        for e in (d.get("exports", {}).get(ds) or {}).get("written", []):
+            if e["format"] in ("geojson", "csv"):
+                ao.append(f"| {catalog.DATASETS[ds]['name']} | `{e['file']}` | {e['format']} | {_mb(e['bytes'])} | {'OK' if e['bytes'] <= 10e6 else 'too big — use Content > New item'} |")
+    ao += ["", "## Steps", "",
+           "1. Sign in at arcgis.com (student or organisational account).",
+           "2. **Content > New item > Your device** — add each GeoJSON/CSV; tick *Publish this file as a hosted layer*; give a clear title, summary, tags and terms of use. CSVs need longitude/latitude (already in the points files).",
+           "3. **Map Viewer** > Add > pick your hosted layers. Order: boundaries at the bottom, lines, then points on top. One layer per question — do not stack layers that show the same features.",
+           "4. Style (Styles pane), set pop-ups to a few key fields, and set visible-scale ranges so dense layers only draw when zoomed in.",
+           "5. **Save as** a web map, add a description stating the data dates and sources (see `metadata/dataset_catalogue.csv`).",
+           "6. **Share** the web map **and every layer** it uses (Everyone / your organisation) — otherwise viewers see a blank map.",
+           "7. Open the link in a private window to confirm it loads, then add it to your StoryMap (`storymap/outline.md`).", "",
+           "## Check before sharing publicly", "- Licences: see the `licence` column in `metadata/dataset_catalogue.csv`; credit every publisher.",
+           "- Layers use WGS84 (EPSG:4326), which ArcGIS Online reprojects to Web Mercator for display."]
+    _w(job, "maps/arcgis_online_publish.md", "\n".join(ao))
+
     # brief + README
     brief = [f"# Project brief — {p['title']}", "", f"**Summary:** {p['summary']}", "", f"**Research question:** {p['question']}", f"**Study area:** {job.region or p['study_area']}",
              f"**Time period:** {p['time_period']}", f"**Proposed analysis:** {p['analysis']}", f"**Expected outputs:** {p['outputs']}",
@@ -189,7 +259,7 @@ def write_all(job):
               "**Status:** data sourced, inspected and organised. **No analysis has been done.**", "",
               "## Folder map", "- `data/raw/` original files exactly as received (never edit)", "- `data/processed/` working copies (GeoJSON/CSV)", "- `data/reference/` study-area boundary",
               "- `metadata/` catalogue, provenance, data dictionary, quality + compatibility reports", "- `workflows/` ArcGIS analysis guide", "- `storymap/` outline and draft skeleton",
-              "- `maps/ images/ exports/` yours to fill", "- `logs/` job log and resumable state", "",
+              "- `maps/` ArcGIS Online publish checklist (`arcgis_online_publish.md`); the rest is yours to fill", "- `images/ exports/` yours to fill", "- `logs/` job log and resumable state", "",
               "## Start here", "1. Read `metadata/quality_report.md` and `metadata/compatibility_report.md`.", "2. Follow `workflows/analysis_guide.md` in ArcGIS Pro.", "3. Plan your story in `storymap/outline.md`.", "",
               "## Reuse", "Check each dataset's licence in `metadata/dataset_catalogue.csv`; credit publishers in your StoryMap."]
     _w(job, "README.md", "\n".join(readme))

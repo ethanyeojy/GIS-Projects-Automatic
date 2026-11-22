@@ -1,50 +1,47 @@
-# GeoProject Studio — prototype v0.1
+# GeoProject Studio
 
-Data-first GIS project discovery for New Zealand environmental topics. It only recommends a project as actionable
-after **live requests** to the real data services confirm access, return a sample, and show the needed fields.
+Real New Zealand datasets, verified before you begin. Pick a project idea, review and filter each dataset, download them, check
+them on a map, and get a draft case study laid out like an ArcGIS StoryMap.
 
-## Run it (Python 3.9+, no installs needed)
+## Run it
 
-    python3 server.py --root ~/GeoProjects
-    # open http://127.0.0.1:8765
+Double-click **start.bat**, or in a terminal:
 
-1. Click **Refresh projects** – the backend contacts GeoNet, Stats NZ, NIWA and GBIF (metadata, counts and small samples only).
-2. Pick a *Verified downloadable* project (optionally choose a region first) → **Start project and get data**.
-3. Watch **Progress**; read **Quality**; browse **Files**; plan in **StoryMap plan**.
+```
+cd <this folder>
+py server.py
+```
 
-Optional: `pip install shapely` (faster region tagging on big files); `export ANTHROPIC_API_KEY=...` before starting to enable free-form assistant answers (untested).
+Then open http://127.0.0.1:8765 (press Ctrl+F5 after an update). The server only listens on your own computer. Python 3.9+, no
+extra packages needed (optional: `pip install shapely` for faster region tagging).
 
-## Architecture
+## The workflow
 
-| Part | Where it runs | Notes |
-|---|---|---|
-| UI (`static/index.html`) | browser | filters, cards, progress, files, StoryMap planner, assistant panel |
-| Connectors (`gps/connectors.py`) | backend | ArcGIS REST, GeoNet FDSN + quake API, GBIF – verify + paged download |
-| Jobs (`gps/jobs.py`) | backend threads | 9 stages, cancel, retry/resume (checksums + page cache), size-limit approval |
-| Quality (`gps/quality.py`) | backend | geometry/date/duplicate checks, point-in-region tagging, compatibility matrix |
-| Package (`gps/package.py`) | backend | writes the folder structure + guide + StoryMap outline |
-| Assistant (`gps/assistant.py`) | backend | built-in answers from real state; optional Claude API (server-side key only) |
+1. **Projects** – 14 project ideas (hazards, freshwater, wildlife, outdoors, marine, weather, climate, environment). Each card has a
+   photo, description and a dropdown of its datasets. **Refresh project** re-checks only that card.
+2. **Project** – the main research question and why it matters, a rough outlook of the finished project, then every dataset with the
+   expected records and size *after* your area, time period and filters. **Find missing datasets** searches real catalogues.
+3. **Progress** – each dataset is its own task with a real state, stage, progress and last-activity time. Over-limit, too-many-records,
+   time-gap and stalled situations pause only that dataset and ask you what to do. Retry / Skip / Cancel / Troubleshoot / Refresh status.
+4. **Quality** – a plain-language check of what was downloaded.
+5. **Files & maps** – download each dataset (GeoJSON, CSV, Excel, original) or everything at once; view any layer on a basemap.
+6. **StoryMap plan** – a draft case study with StoryMaps-style layouts, photos and clearly labelled illustrations.
 
-A Claude artifact/browser page alone cannot do this: it cannot reach most data hosts (CORS/network), write into your folders, or keep
-jobs running. The local backend does the network, files and processing; the browser is only the interface.
-Auto-refresh and jobs only run while the backend process is running.
+## Settings / Filters (top bar)
 
-## What is verified vs not (as of build)
+* **Time period** presets (this month … past 10 years, custom) show exact dates and are used for searching and filtering.
+* **Maximum file size per download (MB)** – applies to each file separately (default 2048 MB). A project containing a file over the
+  limit is marked *not possible* and hidden by default; choose a smaller study area to shrink big layers.
 
-- Tested offline against a **synthetic mock** of the services' response shapes (`python3 tests/e2e.py`): verification logic, paging, Esri-JSON fallback, region subsets, size-gate approval, cancel/retry/resume, no-overwrite, package files.
-- **Not yet run against the real hosts** (the build environment's network blocked them). First run on your machine is the real test.
-- Real response shapes were read for GeoNet quake API (GeoJSON) and ArcGIS service descriptions for Stats NZ, NIWA. GeoNet FDSN text format and GBIF API usage are written from documentation, unverified live.
-- Assistant Claude-API mode: untested.
+## Honesty rules
 
-## Known limits
+* Sources are only used if a live check passes; sizes and counts come from the source (estimates are labelled).
+* Nothing is invented: unknown values are shown as unknown. Time gaps are explained, never silently replaced.
+* Maps, charts and tables in the StoryMap plan are illustrations of layout, not results. No analysis is performed by this tool.
+* Photos come from Wikimedia Commons with their credits; weather/climate/air/wave values come from Open-Meteo (CC BY 4.0, free for
+  non-commercial use; model/reanalysis values, not station readings).
 
-- Only 5 curated project templates, all NZ, all vector. Refresh re-verifies them; open-ended discovery of new datasets (e.g. data.govt.nz CKAN, LINZ with API key, regional council portals) is not built yet.
-- No raster support, no LINZ/Stats NZ Datafinder (keys), no reprojection (working copies are WGS84; project to NZTM2000 in ArcGIS Pro – the guide says when).
-- Lines/polygons are not clipped locally (use ArcGIS); points are clipped to a chosen region.
-- Licences are not legally verified; unknown licences are labelled.
-- No analysis is performed; guide/outline are instructions only.
+## Tests
 
-## Layout produced per project
-
-README.md, project_brief.md, data/{raw,processed,reference}, metadata/{dataset_catalogue.csv, provenance.json, data_dictionary.csv, quality_report.md, compatibility_report.md},
-workflows/analysis_guide.md, storymap/{outline.md, draft_content.md, outline.json, versions/}, maps/, images/originals/, exports/, logs/.
+`py tests/test_workflow.py` runs the workflow against the live services (plus a small local stand-in used only to force stalls).
+`node tests/ui_check.mjs <url> <outdir>` drives the page in headless Edge/Chrome.

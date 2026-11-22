@@ -250,6 +250,19 @@ def _ring_inside(x, y, ring):
     return inside
 
 
+def _thin_ring(ring, max_vertices=2500):
+    """Keep at most ~max_vertices points of a ring (used only for the slow pure-Python point test)."""
+    if len(ring) <= max_vertices:
+        return ring
+    step = -(-len(ring) // max_vertices)
+    out = ring[::step]
+    if out[-1] != ring[-1]:
+        out.append(ring[-1])
+    if out[0] != out[-1]:
+        out.append(out[0])
+    return out
+
+
 def prep_regions(regc_fc, name_field):
     regions = []
     for f in regc_fc.get("features", []):
@@ -262,6 +275,10 @@ def prep_regions(regc_fc, name_field):
         for poly in polys:
             xs = [p[0] for p in poly[0]]
             ys = [p[1] for p in poly[0]]
+            if not HAVE_SHAPELY:
+                # Pure-Python point-in-polygon is slow on full-resolution coastlines (hundreds of thousands of vertices per region), so use
+                # simplified rings for tagging. Accuracy is roughly a kilometre or two right at the coast; shapely (optional) is exact.
+                poly = [_thin_ring(ring) for ring in poly]
             parts.append((min(xs), min(ys), max(xs), max(ys), poly))
         if parts:
             r = {"name": name, "parts": parts, "feature": f}
