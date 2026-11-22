@@ -88,7 +88,7 @@ _EXTRA = [
     _arc("census_ta", "2023 Census population change by age group, by council area", STATS, _STATS_B.format("2023_Census_population_change_by_age_group_and_TALB"), POLY,
          "Stats NZ census data — believed CC BY 4.0 (NOT verified by this app)"),
     _arc("urban_rural", "Urban and rural areas 2022", STATS, _STATS_B.format("Urban_Rural_Areas_2022"), POLY,
-         "Stats NZ boundary data — believed CC BY 4.0 (NOT verified by this app)"),
+         "Stats NZ boundary data — believed CC BY 4.0 (NOT verified by this app)", page_size=100),
     {"id": "geonet_volcano", "role": "essential", "connector": "geojson_url", "url": "https://api.geonet.org.nz/volcano/val",
      "headers": {"Accept": "application/vnd.geo+json;version=2"}, "required_props": ["volcanoTitle", "level", "acc"],
      "name": "GeoNet volcanic alert levels (current)", "publisher": GEONET, "landing_url": "https://www.geonet.org.nz/volcano",

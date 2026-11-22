@@ -589,6 +589,12 @@ class Job:
             if paging:
                 self._ask(d, attempt, cancel, self._decision_record_limit(d, spec, cp, ver.get("count"), "the GBIF search service can't hand over more than 100,000 records at a time"))
                 continue
+            if cov["status"] == "partial" and not dp.get("accept_gap") and not empty:
+                # Part of the period is available: use it (no pause) and say so plainly.
+                dp["accept_gap"] = True
+                msg = f"Only part of your period is available — using the dates that exist. {cov['note']}"
+                self.log(f"{d}: {msg}")
+                self.tset(d, attempt, warnings=list(self.datasets[d]["warnings"]) + [msg])
             if cov["status"] in ("gap", "partial") and not dp.get("accept_gap"):
                 self._ask(d, attempt, cancel, self._decision_gap(d, spec, cov))
                 continue

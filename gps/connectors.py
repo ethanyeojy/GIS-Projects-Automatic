@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from datetime import datetime, timedelta, timezone
 
 from . import net, timeperiod
@@ -203,11 +204,11 @@ class ArcGISSource:
         self._layer_url = None
         self._meta = None
 
-    def _get(self, url, params, cancel=None):
+    def _get(self, url, params, cancel=None, on_bytes=None):
         p = dict(params)
         p.setdefault("f", "json")
         try:
-            st, js = net.get_json(url, p, cancel=cancel)
+            st, js = net.get_json(url, p, cancel=cancel, on_bytes=on_bytes)
         except NetError as e:
             if e.status in (401, 403):
                 raise AuthRequired(f"HTTP {e.status} from service")
@@ -274,12 +275,12 @@ class ArcGISSource:
     def _fmt(self, meta):
         return "geojson" if "geojson" in (meta.get("supportedQueryFormats") or "").lower() else "json"
 
-    def _query(self, url, meta, extra, bbox, cancel=None, where=None):
+    def _query(self, url, meta, extra, bbox, cancel=None, where=None, on_bytes=None):
         fmt = self._fmt(meta)
         p = {"where": where or self.spec.get("where", "1=1"), "outFields": "*", "outSR": "4326", "f": fmt}
         p.update(self._geom_params(bbox))
         p.update(extra)
-        js = self._get(url + "/query", p, cancel)
+        js = self._get(url + "/query", p, cancel, on_bytes)
         fc = js if (fmt == "geojson" and js.get("type") == "FeatureCollection") else esri_to_fc(js)
         return fc, js, fmt
 
@@ -395,10 +396,8 @@ class ArcGISSource:
                 raise Cancelled()
             cp = os.path.join(ctx["checkpoint_dir"], f"page_{i:06d}.json")
             want = min(page, total - i * page)
-            if os.path.exists(cp):
-                with open(cp, "r", encoding="utf-8") as f:
-                    fc = json.load(f)
-            else:
+            fc = _cp_load(cp)
+            if fc is None:
                 if paginated:
                     extra = {"resultOffset": i * page, "resultRecordCount": want}
                     if oid:
@@ -406,9 +405,9 @@ class ArcGISSource:
                 else:
                     batch = ids[i * page:(i + 1) * page]
                     extra = {"objectIds": ",".join(map(str, batch))}
-                fc, _, fmt_used = self._query(url, meta, extra, None if not paginated else bbox, cancel, where)
-                with open(cp, "w", encoding="utf-8") as f:
-                    json.dump(fc, f)
+                fc, _, fmt_used = self._query(url, meta, extra, None if not paginated else bbox, cancel, where,
+                                              on_bytes=lambda n, i=i: progress(message=f"page {i + 1}/{n_pages}: receiving {n / 1e6:.1f} MB"))
+                _cp_save(cp, fc)
             feats.extend(fc.get("features", []))
             nbytes += os.path.getsize(cp)
             progress(records=len(feats), total=total, bytes=nbytes, message=f"page {i + 1}/{n_pages}")
@@ -447,6 +446,29 @@ class ArcGISSource:
             with open(os.path.join(base_dir, rf["file"]), "r", encoding="utf-8") as f:
                 feats.extend(json.load(f).get("features", []))
         return {"type": "FeatureCollection", "features": feats}
+
+
+def _cp_load(cp):
+    """A saved download page, or None if it is missing or was cut off (e.g. the attempt was stopped mid-write)."""
+    try:
+        with open(cp, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        try:
+            os.remove(cp)  # damaged page: fetch it again
+        except OSError:
+            pass
+        return None
+
+
+def _cp_save(cp, obj):
+    """Write a page all-or-nothing, so a stopped attempt can never leave half a file behind."""
+    tmp = f"{cp}.{threading.get_ident()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    os.replace(tmp, cp)
 
 
 # ----------------------------------------------------------------- GeoNet FDSN event service
@@ -926,13 +948,10 @@ class GBIFSource:
             if cancel.is_set():
                 raise Cancelled()
             cp = os.path.join(ctx["checkpoint_dir"], f"page_{i:06d}.json")
-            if os.path.exists(cp):
-                with open(cp, "r", encoding="utf-8") as f:
-                    pg = json.load(f)
-            else:
+            pg = _cp_load(cp)
+            if pg is None:
                 st, pg = net.get_json(f"{GBIF}/occurrence/search", self._params(bbox, opts, limit=min(page, total - i * page), offset=i * page), cancel=cancel)
-                with open(cp, "w", encoding="utf-8") as f:
-                    json.dump(pg, f)
+                _cp_save(cp, pg)
             recs.extend(pg.get("results", []))
             nbytes += os.path.getsize(cp)
             progress(records=len(recs), total=total, bytes=nbytes, message=f"page {i + 1}/{n_pages}")
@@ -1100,18 +1119,15 @@ class OpenMeteo:
             if cancel.is_set():
                 raise Cancelled()
             cp = os.path.join(ctx["checkpoint_dir"], f"loc_{i:03d}.json")
-            if os.path.exists(cp):
-                with open(cp, "r", encoding="utf-8") as f:
-                    item = json.load(f)
-            else:
+            item = _cp_load(cp)
+            if item is None:
                 parts = []
                 for (a, b) in self._chunks(per):
                     st, js = self._req(loc, a, b, variables, cancel)
                     parts.append(js)
                     progress(message=f"{loc[0]}: {a} → {b}")
                 item = {"location": loc[0], "region": loc[1], "lat": loc[2], "lon": loc[3], "responses": parts}
-                with open(cp, "w", encoding="utf-8") as f:
-                    json.dump(item, f)
+                _cp_save(cp, item)
             results.append(item)
             nbytes += os.path.getsize(cp)
             rows += per["days"]
