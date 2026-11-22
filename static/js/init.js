@@ -27,6 +27,15 @@ $('#a_form').onsubmit = async e => {
   });
 };
 function toggleAssist(force) { const a = $('#assist'), on = force === undefined ? !a.classList.contains('open') : force; a.classList.toggle('open', on); $('#fab').setAttribute('aria-expanded', on); if (on) $('#a_in').focus(); }
+function helpProject() { return S.chosen ? S.chosen.id : (S.jobData ? S.jobData.project_id : null); }
+$('#hb_trouble').onclick = async () => {
+  const id = helpProject(); if (!id) { toast('Choose a project first (Projects tab), then press Troubleshoot.', 'bad'); return; }
+  await troubleshootProject(id); S.open = true; showTab('projects'); renderFeed(); toast('Troubleshoot results are on the project card.');
+};
+$('#hb_find').onclick = () => {
+  if (!helpProject()) { toast('Choose a project first (Projects tab), then search for other data.', 'bad'); return; }
+  toggleAssist(true); $('#a_in').value = 'identify gaps'; $('#a_form').requestSubmit();
+};
 $('#projBtn').onclick = () => { showTab('projects'); S.open = true; renderFeed(); };
 $('#toggleAssist').onclick = $('#fab').onclick = () => toggleAssist(); $('#a_close').onclick = () => toggleAssist(false);
 document.addEventListener('keydown', e => {

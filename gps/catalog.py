@@ -715,6 +715,7 @@ def guide_steps(project, ctx):
              "Source website / service viewer", "Pick samples across the study area", "Spot-check notes", "Values match the publisher's view",
              "Publisher viewers may use newer data than your snapshot (see retrieval dates)."),
         step("Final map (ArcGIS Online)", "Publish your result layers to ArcGIS Online",
+             "Put your finished layers online so a web map can use them.",
              "Your finished result layers from ArcGIS Pro (not the raw downloads); maps/arcgis_online_publish.md lists this package's files and sizes",
              "ArcGIS Pro > Share > Web Layer > Publish Web Layer (Feature layer, hosted) — or ArcGIS Online > Content > New item > Your device (zipped shapefile or GeoJSON)",
              "Name layers clearly; Summary + Tags + Terms of use filled in; Folder = project name; keep each file under your org's upload limit (Map Viewer 'Add layer from file' is limited to about 10 MB, so use Content > New item for bigger files)",

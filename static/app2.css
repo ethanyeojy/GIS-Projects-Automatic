@@ -117,3 +117,5 @@ header button{white-space:nowrap}#setSummary{display:none}#hstatus{white-space:n
 .toast{padding:11px 16px;border-radius:12px;background:#17303a;color:#fff;font-size:13.5px;box-shadow:0 10px 28px rgba(0,0,0,.35);animation:fadeUp .25s;transition:opacity .5s}.toast.bad{background:#7a1f19}.toast.out{opacity:0}
 
 @media (max-width:780px){header{padding:10px 12px;flex-wrap:wrap}#setPanel{padding:12px}.planfoot{margin:22px -12px -12px;padding:12px}.sm-sec,.sm-imm,.sm-cover{padding:20px}.sm-over{margin-top:12px}}
+
+.helpbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
