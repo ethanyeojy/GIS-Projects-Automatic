@@ -34,7 +34,7 @@ def info(spec, period, verification=None):
                 except ValueError:
                     share = 0
                 return {"status": "partial", "first_available": fa,
-                        "note": f"Values only start around {fa} — about {share:.0%} of {s} → {e} (the start) has no data from this service."}
+                        "note": f"This service does not cover the start of your period: values only start around {fa}, so about {share:.0%} of {s} → {e} has no data."}
             if any(good.values()):
                 missing = [f"{k} ({av[k]['window']})" for k, g in good.items() if not g]
                 return {"status": "partial", "note": "No values returned for: " + ", ".join(missing) + ". This service does not cover that part of your period."}

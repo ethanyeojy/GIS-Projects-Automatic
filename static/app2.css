@@ -131,3 +131,33 @@ header button{white-space:nowrap}#setSummary{display:none}#hstatus{white-space:n
 .pc-l-split{display:grid;grid-template-columns:38% 1fr;column-gap:14px;align-items:start}
 .pc-l-split>*{grid-column:2}.pc-l-split .pc-imgwrap{grid-column:1;grid-row:1/span 4;margin:-16px 0 -14px -20px;height:calc(100% + 30px);min-height:220px}
 @media (max-width:640px){.pc-l-split{display:block}.pc-l-split .pc-imgwrap{margin:-16px -16px 12px -20px;height:168px;min-height:0}}
+
+/* Leaflet's layer-switcher icon image isn't bundled: draw it with an inline SVG */
+.leaflet-control-layers-toggle{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M12 3 2 8l10 5 10-5-10-5z'/%3E%3Cpath d='m2 13 10 5 10-5'/%3E%3Cpath d='m2 17.5 10 5 10-5' opacity='.6'/%3E%3C/svg%3E")!important;background-size:22px 22px!important;background-position:center!important}
+
+/* Fraunces (as served by Google Fonts) draws the macron beside ā ē ī ō ū instead of above them ("Manawatu¯").
+   Te reo Māori place names are everywhere here, so just those letters come from a serif that places macrons correctly. */
+@font-face{font-family:"Macron Serif";src:local("Georgia"),local("Cambria"),local("Times New Roman");unicode-range:U+0100-0101,U+0112-0113,U+012A-012B,U+014C-014D,U+016A-016B}
+@font-face{font-family:"Macron Serif";font-weight:600 700;src:local("Georgia Bold"),local("Georgia"),local("Cambria Bold");unicode-range:U+0100-0101,U+0112-0113,U+012A-012B,U+014C-014D,U+016A-016B}
+:root{--serif:"Macron Serif","Fraunces","Cormorant Garamond","Playfair Display",Georgia,"Times New Roman",serif}
+
+/* StoryMap plan layout fixes: the section itself is NOT a grid (an old rule split label / heading / content into
+   separate cells and left half the width empty); only .sm-side is the two-column map + narrative layout. */
+.sm-sec.sidecar{display:block}
+.sm-side{margin-top:6px}
+.sm-media,.sm-narr{min-width:0}
+.sm-narr{display:grid;gap:12px;align-content:start}
+figure.mock,figure.sm-photo{max-width:100%}
+figure.mock svg,figure.mock img,.sm-photo img{max-width:100%;height:auto;display:block}
+figure.mock.wide{overflow:hidden}
+figure.mock .mock-badge{max-width:calc(100% - 16px);white-space:normal;line-height:1.35}
+.sm-sec.down .sm-bg figure,.sm-sec.down .sm-bg img{width:100%}
+@media (max-width:900px){.sm-media{position:static}}
+/* illustrations keep their shape; the spare space either side takes the map's sea colour / the chart's background */
+.mocksvg{background:linear-gradient(180deg,#dbe9f2,#c7dcea)}
+.mocksvg.chart{background:#eef1f4}
+figure.mock{background:#dbe9f2}
+/* long unbroken text (web addresses in Sources) must wrap instead of stretching the column off-screen on phones */
+.sm-part,.sm-narr,.sm-over,.sm-sec p{min-width:0;overflow-wrap:anywhere}
+@media (max-width:900px){.sm-cols,.sm-cols.two{grid-template-columns:minmax(0,1fr)}}
+figure.mock figcaption{background:var(--card);margin:0}

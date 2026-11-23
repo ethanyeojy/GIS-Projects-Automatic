@@ -43,7 +43,25 @@ def _fetch_story_images(job, p):
         status = "downloaded"
         try:
             if not os.path.exists(target):
-                st, _, body = net.request(im["url"], timeout=90, retries=2)
+                body, last = None, None
+                cands = [im["url"]] + ([im["thumb"]] if im.get("thumb") and im.get("thumb") != im["url"] else []) + \
+                        ([im["url"].replace("/1920px-", "/960px-")] if "/1920px-" in im["url"] else [])
+                for u in cands:
+                    for wait_s in (0, 5, 15):  # Wikimedia asks clients to slow down (HTTP 429): wait, then try again
+                        if wait_s:
+                            import time as _t
+                            _t.sleep(wait_s)
+                        try:
+                            st, _, body = net.request(u, timeout=90, retries=1)
+                            break
+                        except net.NetError as e:
+                            last = e
+                            if e.status != 429:
+                                break
+                    if body:
+                        break
+                if not body:
+                    raise last or net.NetError("no image data")
                 with open(target, "wb") as f:
                     f.write(body)
         except Exception as e:  # noqa: BLE001 - keep the credit + source link so the image can be fetched by hand

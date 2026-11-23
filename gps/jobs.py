@@ -823,7 +823,7 @@ class Job:
         stall = float(self.store.settings.get("stall_seconds") or 90)
         now = time.time()
         for d, t in list(self.datasets.items()):
-            if t["state"] != "running" or not t.get("last_activity_ts"):
+            if t["state"] not in ("running", "retrying") or not t.get("last_activity_ts"):
                 continue
             idle = now - t["last_activity_ts"]
             if idle < stall or t.get("stalled"):
@@ -834,8 +834,10 @@ class Job:
             if t["auto_retries"] < MAX_AUTO_RETRIES:
                 n = t["auto_retries"] + 1
                 self.log(f"{d}: no activity for {int(idle)}s — restarting automatically ({n} of {MAX_AUTO_RETRIES})")
-                self.task_start(d, force=True)
+                # mark it BEFORE restarting (the new attempt then sets its own state) and restart the stall clock, so a new
+                # attempt that hangs straight away is still noticed and, after the last restart, offered Retry/Skip
                 self.ds(d, auto_retries=n, state="retrying", message=f"No activity for {int(idle)}s, so it was restarted automatically ({n} of {MAX_AUTO_RETRIES}). Finished pieces are reused.")
+                self.task_start(d, force=True)
             else:
                 self.log(f"{d}: STALLED — no activity for {int(idle)}s and automatic restarts are used up")
                 self.tset(d, None, quiet=True, stalled=True, message=f"Appears stalled: no activity for {int(idle)}s",

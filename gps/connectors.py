@@ -1198,8 +1198,9 @@ class OpenMeteo:
             days = per["days"]
             rows = len(locs) * days
             res["count"] = rows
-            res["est_bytes"] = rows * 230
-            res["est_note"] = "Estimate: ~230 bytes per location-day record (not measured)."
+            per_row = 12 + 8 * len(variables)  # measured: ~26-33 bytes per location-day for 2-3 variables in the raw file
+            res["est_bytes"] = rows * per_row
+            res["est_note"] = f"Estimate: ~{per_row} bytes per location-day for {len(variables)} variable(s) (based on measured downloads)."
             res["geometry_type"] = "esriGeometryPoint"
             res["crs"] = "EPSG:4326 (location points)"
             res["fields"] = [{"name": v, "type": "", "alias": ""} for v in ["location", "region", "date"] + variables]

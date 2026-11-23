@@ -161,12 +161,14 @@ def t3_time_period():
     cust = api("/api/period?preset=custom&start=2024-03-01&end=2024-03-31")
     bad = api("/api/period?preset=custom&start=2025-03-01&end=2024-03-31")
     disc = api("/api/discovery", {"project_id": "nz-weather-extremes", "preset": "month", "query": "rainfall stations"})
-    check("3. Time period changes real record counts", rain(q1)["count"] < rain(q2)["count"] and rain(q1)["count"] == 16 * 22,
+    from datetime import date
+    today = date.today()
+    check("3. Time period changes real record counts", rain(q1)["count"] < rain(q2)["count"] and rain(q1)["count"] == 16 * today.day,
           f"month={rain(q1)['count']} rows, 2y={rain(q2)['count']} rows ({q2['period']['text']})")
-    check("3b. Presets show their actual dates", f_this["start"] == "2026-11-01" and f_five["start"] == "2021-11-22" and cust["days"] == 31,
+    check("3b. Presets show their actual dates", f_this["start"] == today.replace(day=1).isoformat() and f_five["start"] == today.replace(year=today.year - 5).isoformat() and cust["days"] == 31,
           f"month {f_this['text']} | 5y {f_five['text']} | custom {cust['text']}")
     check("3c. A bad custom range is explained", bad.get("_http") == 400 and "after" in bad.get("error", ""), bad.get("error", ""))
-    check("3d. Dataset searches receive the period", disc["context"]["period"].startswith("2026-11-01"), disc["context"]["period"])
+    check("3d. Dataset searches receive the period", disc["context"]["period"].startswith(today.replace(day=1).isoformat()), disc["context"]["period"])
     air = api("/api/plan", {"project_id": "nz-air-sea", "preset": "10y"})
     gap = next(d for d in air["datasets"] if d["id"] == "om_air")["coverage"]
     check("3e. A coverage gap is explained, not silently filled", gap["status"] in ("partial", "gap") and "not cover" in gap["note"], gap["note"][:110])
@@ -223,7 +225,8 @@ def t5_filters_and_export():
 
 
 def t6_per_file_limit():
-    api("/api/settings", {"max_file_mb": 3})
+    LIM = 0.5  # MB per file: each weather file is below it, but together they are well over it
+    api("/api/settings", {"max_file_mb": LIM})
     jid = start("nz-weather-extremes", None, "2y", ds={d: {"include": d in ("om_rain", "om_temp", "om_wind", "regc")} for d in catalog.PROJECT_BY_ID["nz-weather-extremes"]["datasets"]})
     j = finished(jid, 600)
     states = {d: j["datasets"][d]["state"] for d in ("om_rain", "om_temp", "om_wind")}
@@ -231,9 +234,9 @@ def t6_per_file_limit():
     combined = sum(sizes.values())
     all_prompted = any(j["datasets"][d]["decision"] for d in states)
     check("6. The size limit applies to each file separately, not the combined total",
-          all(s == "completed" for s in states.values()) and combined > 3 * 1024 * 1024 * 0.5 and all(v <= 3 * 1024 * 1024 for v in sizes.values()) and not all_prompted,
-          f"limit 3 MB/file; files {[round(v / 1e6, 2) for v in sizes.values()]} MB, combined {round(combined / 1e6, 2)} MB — no prompts")
-    api("/api/settings", {"max_file_mb": 0.5})
+          all(s == "completed" for s in states.values()) and combined > LIM * 1024 * 1024 and all(v <= LIM * 1024 * 1024 for v in sizes.values()) and not all_prompted,
+          f"limit {LIM} MB/file; files {[round(v / 1e6, 2) for v in sizes.values()]} MB, combined {round(combined / 1e6, 2)} MB — no prompts")
+    api("/api/settings", {"max_file_mb": 0.2})
     jid2 = start("nz-weather-extremes", None, "2y", ds={d: {"include": d in ("om_rain", "cliflo_rain", "regc")} for d in catalog.PROJECT_BY_ID["nz-weather-extremes"]["datasets"]})
     w = wait(lambda: job(jid2)["datasets"]["om_rain"]["state"] == "waiting_input" and job(jid2), 120)
     cl = wait(lambda: job(jid2)["datasets"]["cliflo_rain"]["state"] == "completed" and job(jid2), 120)

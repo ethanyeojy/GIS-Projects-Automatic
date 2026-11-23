@@ -438,11 +438,22 @@ function ensureMap() {
   if (typeof L === 'undefined') { $('#mapbox').innerHTML = '<div class="banner bad">The map library did not load. Check that static/vendor/leaflet.js exists.</div>'; return null; }
   if (MAP) { MAP.remove(); MAP = null; }
   MAP = L.map('mapbox', { preferCanvas: true }).setView([-41, 173], 5);
-  const carto = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors © CARTO' });
+  // Esri Light Gray (no API key needed; matches ArcGIS Online). CARTO now returns an 'API key required' image instead of tiles.
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+  const carto = L.layerGroup([
+    L.tileLayer(ESRI + 'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16, attribution: 'Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap contributors' }),
+    L.tileLayer(ESRI + 'Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16, pane: 'shadowPane' })]);
   const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles © Esri' });
   carto.addTo(MAP); L.control.layers({ 'Light basemap': carto, 'OpenStreetMap': osm, 'Satellite': sat }).addTo(MAP); L.control.scale().addTo(MAP);
   return MAP;
+}
+/* NZ data that crosses the 180° line (Chatham Islands, EEZ) would make the map zoom out to the whole world:
+   for display only, move western-hemisphere longitudes in the NZ latitude band by +360 so NZ draws as one block. */
+function wrapNZ(fc) {
+  const fix = c => typeof c[0] === 'number' ? (c[0] < -150 && c[1] < -20 && c[1] > -60 ? [c[0] + 360, ...c.slice(1)] : c) : c.map(fix);
+  (fc.features || []).forEach(f => { if (f.geometry && f.geometry.coordinates) f.geometry.coordinates = fix(f.geometry.coordinates); });
+  return fc;
 }
 function geoLayer(fc, color) {
   return L.geoJSON(fc, {
@@ -458,7 +469,7 @@ async function viewLayer(ds) {
     $('#viewer').scrollIntoView({ behavior: 'smooth', block: 'start' });
     const map = ensureMap(); if (!map) return;
     const fc = await api(`/api/projects/${encodeURIComponent(S.folderSlug)}/layer?ds=${encodeURIComponent(ds)}`, undefined, { timeout: 180000 });
-    OVERLAY = geoLayer(fc, '#e87a3d').addTo(map);
+    OVERLAY = geoLayer(wrapNZ(fc), '#e87a3d').addTo(map);
     const b = OVERLAY.getBounds(); if (b.isValid()) map.fitBounds(b.pad(0.1), { maxZoom: 12 });
     const m = fc.meta; $('#v_note').textContent = `Showing ${fmtN(m.shown)} of ${fmtN(m.with_geometry)} features with a location (${m.geometry_types.join(', ').toLowerCase()})${m.sampled || m.simplified ? ' — thinned for the browser; the files you download are complete' : ''}. Click a feature to see its attributes.`;
     setTimeout(() => { if (MAP === map) map.invalidateSize(); }, 150);
@@ -471,7 +482,7 @@ async function toggleRegions(on) {
   if (!on) return;
   await run('regions', async () => {
     const fc = await api(`/api/projects/${encodeURIComponent(S.folderSlug)}/layer?ds=regc`, undefined, { timeout: 180000 });
-    REGION_LAYER = L.geoJSON(fc, { style: () => ({ color: '#2b7fff', weight: 1.5, fillOpacity: 0 }), onEachFeature: (f, l) => l.bindTooltip(f.properties && (f.properties.REGC2023_V1_00_NAME || ''), { sticky: true }) }).addTo(MAP);
+    REGION_LAYER = L.geoJSON(wrapNZ(fc), { style: () => ({ color: '#2b7fff', weight: 1.5, fillOpacity: 0 }), onEachFeature: (f, l) => l.bindTooltip(f.properties && (f.properties.REGC2023_V1_00_NAME || ''), { sticky: true }) }).addTo(MAP);
     if (OVERLAY) OVERLAY.bringToFront();
   });
 }

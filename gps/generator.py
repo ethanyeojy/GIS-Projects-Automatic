@@ -84,7 +84,8 @@ def commons_photos(queries, n=3, used=None, cancel=None):
             thumb = (ii.get("thumburl") or "").split("?")[0]
             if not thumb:
                 continue
-            big = thumb.replace("/960px-", "/1920px-") if (ii.get("width") or 0) >= 1920 and "/960px-" in thumb else (ii.get("url") or thumb).split("?")[0]
+            w = ii.get("width") or 0  # Wikimedia only serves standard thumbnail widths (… 960, 1280, 1920); originals get rate-limited
+            big = thumb.replace("/960px-", "/1920px-") if w >= 1920 else thumb.replace("/960px-", "/1280px-") if w >= 1280 else thumb
             artist = _strip((m.get("Artist") or {}).get("value"))[:80] or "Unknown (see source page)"
             desc = _strip((m.get("ImageDescription") or {}).get("value"))[:140]
             alt = desc or re.sub(r"\.(jpe?g|png)$", "", title.replace("File:", ""), flags=re.I).replace("_", " ")
@@ -240,7 +241,7 @@ def _species_project(info, region, rng):
         "theme": g["theme"], "difficulty": "Beginner" if style != "hotspots" else "Intermediate", "workload_h": [6, 10] if style != "hotspots" else [8, 12],
         "software": ["ArcGIS Pro", "ArcGIS Online", "ArcGIS StoryMaps"], "period_class": "historical", "data_type": "vector",
         "summary": f"Map the real GBIF records of the {nice} in {region} and relate them to {', '.join(n.lower() for n in ctx_names)}.",
-        "question": question, "study_area": region, "region": region,
+        "question": question, "study_area": region, "region": region, "topic": f"where and when the {name} is recorded in {region}",
         "time_period": "Records with a year inside your chosen period", "time_note": "Filtered by each record's year; records without a year are left out.",
         "analysis": qs[0]["how"] + " " + qs[1]["how"], "outputs": "Records map, summary chart, overlay map, short StoryMap.",
         "purpose": f"This project investigates where and when the {name} is recorded in {region} and how that relates to {ctx_names[0].lower()}. "
@@ -301,6 +302,7 @@ def _weather_project(ds, region, style, rng):
         "software": ["ArcGIS Pro", "ArcGIS Online", "ArcGIS StoryMaps"], "period_class": "multi-year", "data_type": "table + points",
         "summary": f"Explore daily {word} at the weather points in {region} and how it relates to {', '.join(cn)}.",
         "question": question, "study_area": region, "region": region,
+        "topic": f"{word} extremes in {region}" if style == "extremes" else f"how {word} changes through the year in {region}",
         "time_period": "Daily values for your chosen period", "time_note": "Daily model/reanalysis values for exactly your chosen period.",
         "analysis": qs[0]["how"] + " " + qs[1]["how"], "outputs": "Time-series charts, weather-point map, short StoryMap.",
         "purpose": f"This project investigates {word} in {region} — its {extreme} and its yearly rhythm. It matters because weather drives floods, droughts, "
@@ -312,7 +314,7 @@ def _weather_project(ds, region, style, rng):
         "needs": [("Daily values", [(ds, r"^date$")]), ("Region names", [("regc", r"NAME$")])],
         "case_study": {"headline": title, "dek": f"Years of daily {word} records for {region}, ready to turn into a story about the weather people actually live with.",
                        "time_dataset": ds, "overlay": ctx + ["regc"], "questions": qs, "images": []},
-        "_new_datasets": [], "_photo_q": [(f"{region} New Zealand {ph}", PH_MUST.get(ds, ph.split()[0])), (f"New Zealand {ph}", PH_MUST.get(ds, ph.split()[0])),
+        "_new_datasets": [], "_photo_q": [(f"{region} New Zealand {ph}", _nz(PH_MUST.get(ds, ph.split()[0]), region)), (f"New Zealand {ph}", _nz(PH_MUST.get(ds, ph.split()[0]), region)),
                       (f"{region} New Zealand landscape", re.escape(region.split("-")[0]) + ".*" + SCENE)],
         "_sig": f"weather:{ds}:{region}:{style}",
     }
@@ -355,7 +357,7 @@ def _hazard_project(kind, region, style, rng):
         "theme": "hazards", "difficulty": "Intermediate", "workload_h": [8, 12], "software": ["ArcGIS Pro", "ArcGIS Online", "ArcGIS StoryMaps"],
         "period_class": "multi-year" if kind in ("quake", "volcano") else "modelled", "data_type": "vector",
         "summary": f"Investigate {word}s in {region} with {', '.join(n.lower() for n in names[:3])}.",
-        "question": question, "study_area": region, "region": region,
+        "question": question, "study_area": region, "region": region, "topic": f"{word} hazard in {region}",
         "time_period": "Events in your chosen period (modelled layers are not date-based)", "time_note": "Earthquake events use your period; modelled hazard layers are static.",
         "analysis": qs[0]["how"] + " " + qs[1]["how"], "outputs": "Hazard map, ranking chart, exposure overlay, short StoryMap.",
         "purpose": f"This project investigates {word} hazard in {region} and which places and people are most exposed. "
@@ -366,7 +368,7 @@ def _hazard_project(kind, region, style, rng):
         "needs": [("Hazard geometry", [(dsl[0], "geometry")]), ("Region names", [("regc", r"NAME$")])],
         "case_study": {"headline": title, "dek": f"{region} lives with {word}s. Real hazard data shows where — and who is closest.",
                        "time_dataset": dsl[0] if kind in ("quake",) else None, "overlay": dsl[1:] + ["regc"], "questions": qs, "images": []},
-        "_new_datasets": [], "_photo_q": [(f"{region} New Zealand {word}", word.split()[0]), (ph, word.split()[0]), (f"{region} New Zealand landscape", re.escape(region.split("-")[0]) + ".*" + SCENE)],
+        "_new_datasets": [], "_photo_q": [(f"{region} New Zealand {word}", _nz(word.split()[0], region)), (ph, _nz(word.split()[0], region)), (f"{region} New Zealand landscape", re.escape(region.split("-")[0]) + ".*" + SCENE)],
         "_sig": f"hazard:{kind}:{region}:{style}",
     }
 
@@ -392,6 +394,7 @@ def _outdoors_project(ds, region, rng):
         "period_class": "current", "data_type": "vector",
         "summary": f"Map the Department of Conservation's {word} in {region} and compare them with conservation land and districts.",
         "question": f"How are DOC's {word} spread across {region}, and which districts are well or poorly served?", "study_area": region, "region": region,
+        "topic": f"DOC's {word} in {region}",
         "time_period": "Current DOC data (not date-based)", "time_note": "Current DOC layers — your time period does not change them.",
         "analysis": qs[0]["how"] + " " + qs[1]["how"], "outputs": "Facility map, density chart, access map, short StoryMap.",
         "purpose": f"This project investigates access to the outdoors in {region} through DOC's {word}. It matters because getting into nature is part of "
@@ -401,7 +404,7 @@ def _outdoors_project(ds, region, rng):
         "needs": [("Facility locations", [(ds, "geometry")]), ("District names", [("ta", r"NAME")])],
         "case_study": {"headline": title, "dek": f"{region}'s {word} are a doorway to the backcountry. Where are they, and who can reach them?",
                        "time_dataset": None, "overlay": ctx + ["regc"], "questions": qs, "images": []},
-        "_new_datasets": [], "_photo_q": [(f"{region} New Zealand {word.rstrip('s')}", word.split()[-1].rstrip("s")), (f"{region} New Zealand tramping", r"(tramp|track|hut|walk|hik|camp)"),
+        "_new_datasets": [], "_photo_q": [(f"{region} New Zealand {word.rstrip('s')}", _nz(word.split()[-1].rstrip("s"), region)), (f"{region} New Zealand tramping", _nz(r"tramp|track|hut|walk|hik|camp", region)),
                       (f"{region} New Zealand landscape", re.escape(region.split("-")[0]) + ".*" + SCENE)],
         "_sig": f"outdoors:{ds}:{region}",
     }
@@ -460,7 +463,7 @@ def _discovered_project(store, topic, region, rng, used_urls, cancel):
             "period_class": "current", "data_type": "vector",
             "summary": f"Explore “{nm}” ({v.get('count'):,} {geo} features in {region}, published by {r['owner']}) alongside districts and urban areas.",
             "question": f"How are {region}'s {word} distributed, and how does that differ between districts and between town and country?",
-            "study_area": region, "region": region, "time_period": "Current layer (not date-based)", "time_note": "A published layer — your time period does not change it.",
+            "study_area": region, "region": region, "topic": f"{word} in {region}", "time_period": "Current layer (not date-based)", "time_note": "A published layer — your time period does not change it.",
             "analysis": qs[0]["how"] + " " + qs[1]["how"], "outputs": "District map, urban/rural comparison, short StoryMap.",
             "purpose": f"This project investigates {word} in {region} using a layer found live on ArcGIS Online. It matters because local data like this shows how "
                        "a place is actually organised — and where it could do better.",
@@ -470,7 +473,7 @@ def _discovered_project(store, topic, region, rng, used_urls, cancel):
             "needs": [("Layer geometry", [(spec["id"], "geometry")]), ("District names", [("ta", r"NAME")])],
             "case_study": {"headline": title, "dek": f"A real layer, found online today: {nm}.", "time_dataset": None, "overlay": ctx + ["regc"], "questions": qs, "images": []},
             "_new_datasets": [spec], "_verified": {spec["id"]: v},
-            "_photo_q": [(f"{region} New Zealand {word}", key), (f"New Zealand {word}", key), (f"{region} New Zealand landscape", re.escape(region.split("-")[0]) + ".*" + SCENE)],
+            "_photo_q": [(f"{region} New Zealand {word}", _nz(key, region)), (f"New Zealand {word}", _nz(key, region)), (f"{region} New Zealand landscape", re.escape(region.split("-")[0]) + ".*" + SCENE)],
             "_sig": f"discovered:{r['url']}",
         }
     return None
@@ -520,6 +523,12 @@ def build(store, family, arg, region, rng, used_urls, cancel):
     if family == "outdoors":
         return _outdoors_project(arg, region, rng)
     return _discovered_project(store, arg, region, rng, used_urls, cancel)
+
+
+def _nz(topic, region=""):
+    """'must mention' pattern: the topic AND New Zealand (or the region) somewhere in the photo's title/description."""
+    place = r"New Zealand|Aotearoa|\bNZ\b" + ("|" + re.escape(region.split("-")[0]) if region else "")
+    return rf"^(?=[\s\S]*(?:{place}))(?=[\s\S]*(?:{topic}))"
 
 
 def finish(p, used_photos, design, cancel=None):
