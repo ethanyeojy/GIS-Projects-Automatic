@@ -162,7 +162,7 @@ class H(BaseHTTPRequestHandler):
             order, imgs, k = ["cover", "q1", "q2", "q3", "conclusion"], [], 0
             for im in proj["case_study"]["images"]:
                 sec = "cover" if im["role"] == "cover" else order[min((k := k + 1), len(order) - 1)]
-                imgs.append({"file": im["url"].replace("/1920px-", "/960px-"), "section": sec, "alt": im["alt"], "caption": im["alt"],
+                imgs.append({"file": im.get("thumb") or im["url"].replace("/1920px-", "/960px-"), "section": sec, "alt": im["alt"], "caption": im["alt"],
                              "credit": f"{im['credit']} — {im['licence']} — via Wikimedia Commons", "source_page": im["page"]})
             return self._json({"title": proj["title"], "question": proj["question"], "purpose": proj["purpose"], "sections": secs, "images": imgs, "note": "Rough outlook only: illustrations, no downloaded data yet."})
         if method == "POST" and path == "/api/refresh":
@@ -278,7 +278,7 @@ class H(BaseHTTPRequestHandler):
             elif method == "POST" and act == "retry":
                 JOBS.retry(job.id)
             return self._json(job.snapshot())  # reading status never restarts or duplicates anything
-        m = re.fullmatch(r"/api/projects/([^/]+)/(tree|file|img|dl|zip|layer|table|datasets|storymap|storymap/versions|storymap/restore|storymap/image)", path)
+        m = re.fullmatch(r"/api/projects/([^/]+)/(tree|file|img|dl|zip|layer|table|datasets|storymap|storymap/versions|storymap/restore|storymap/image|agol)", path)
         if m:
             return self._project_route(method, unquote(m.group(1)), m.group(2), qs)
         if method == "POST" and path == "/api/assistant":
@@ -418,6 +418,14 @@ class H(BaseHTTPRequestHandler):
             write_json_atomic(op, new)
             with open(os.path.join(folder, "storymap", "outline.md"), "w", encoding="utf-8") as f:
                 f.write(package.render_outline_md(new))
+        if what == "agol":  # Final map in ArcGIS Online (built with the package; POST rebuilds it, e.g. for an older package)
+            ap = os.path.join(folder, "maps", "arcgis_online", "agol.json")
+            if method == "POST" or not os.path.exists(ap):
+                if not job:
+                    raise KeyError("no job for this project folder")
+                from gps import agol
+                job.data["agol"] = agol.build(job)
+            return self._json(read_json(ap, {}))
         if what == "storymap":
             if method == "GET":
                 return self._json(read_json(op, None))

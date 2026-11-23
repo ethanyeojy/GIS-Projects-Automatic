@@ -30,7 +30,7 @@ QUAKE_API = {
 }
 
 ESL = {
-    "id": "niwa_esl_1pc", "role": "essential", "connector": "arcgis",
+    "id": "niwa_esl_1pc", "simplify_m": 5, "role": "essential", "connector": "arcgis",
     "name": "NZ 1% AEP extreme sea level flooding map", "publisher": "NIWA",
     "service_url": "https://services3.arcgis.com/fp1tibNcN9mbExhG/ArcGIS/rest/services/CoastalFloodLayersARI100/FeatureServer",
     "layer_name_re": r"CoastalFlood", "geometry": "esriGeometryPolygon",
@@ -40,7 +40,7 @@ ESL = {
 }
 
 FLOODSTATS = {
-    "id": "niwa_flood_stats", "role": "essential", "connector": "arcgis",
+    "id": "niwa_flood_stats", "simplify_m": 5, "role": "essential", "connector": "arcgis",
     "name": "NZ modelled flood frequency on river lines (Henderson & Collins v2)", "publisher": "NIWA",
     # NIWA's own server (gis.niwa.co.nz) returns HTTP 500; this is NIWA's hosted ArcGIS Online copy of the same layer.
     "service_url": "https://services3.arcgis.com/fp1tibNcN9mbExhG/arcgis/rest/services/NZ_Flood_Statistics_Henderson_Collins_V2_REC1_Layer_WFL1/FeatureServer",

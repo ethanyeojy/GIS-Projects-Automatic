@@ -705,13 +705,21 @@ class Job:
             if cancel.is_set() or not self.current(d, attempt):
                 raise Cancelled()
         ver = self.data["verification"].get(d) or {}
+        beat = connectors.heartbeat(lambda **kw: self.tset(d, attempt, **kw), "checking and preparing the downloaded file")
+        beat.__enter__()
+        try:
+            return self._process_inner(d, attempt, cancel, spec, src, rec, ver, alive)
+        finally:
+            beat.__exit__(None, None, None)
+
+    def _process_inner(self, d, attempt, cancel, spec, src, rec, ver, alive):
         fc = src.load_fc(rec["raw_files"], self.path("data", "raw"))
         alive()
         hints = {x["name"] for x in ver.get("fields", []) if x.get("type") == "esriFieldTypeDate"}
         ins = quality.inspect_fc(fc, hints)
         self.data["inspections"][d] = ins
         self.data["fields"][d] = ins.get("fields", [])
-        warns = list(self.datasets[d]["warnings"]) + ins["warnings"]
+        warns = list(self.datasets[d]["warnings"]) + ins["warnings"] + quality.series_coverage(fc)
         if ins["blocking"]:
             self.tset(d, attempt, warnings=warns)
             raise TaskFailed("failed validation: " + "; ".join(ins["blocking"]))

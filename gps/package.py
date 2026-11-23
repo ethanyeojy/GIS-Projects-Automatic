@@ -228,26 +228,13 @@ def write_all(job):
           "## Limitations", *["- " + x for x in p["limitations"]], "", "## Conclusion", "[TO WRITE]"]
     _w(job, "storymap/draft_content.md", "\n".join(dc))
 
-    # ArcGIS Online publishing checklist built from this job's real files
-    ao = [f"# Final map — publish to ArcGIS Online — {p['title']}", "",
-          "Generated from the files this tool actually wrote. Your **result** layers (after analysis) are what you publish; these lists show what you can add straight away.", "",
-          "## Files ready to add (Content > New item > Your device)", "",
-          "| Dataset | File | Format | Size | Map Viewer 'Add layer from file' (≈10 MB) |", "|---|---|---|---|---|"]
-    for ds in ds_ids:
-        for e in (d.get("exports", {}).get(ds) or {}).get("written", []):
-            if e["format"] in ("geojson", "csv"):
-                ao.append(f"| {catalog.DATASETS[ds]['name']} | `{e['file']}` | {e['format']} | {_mb(e['bytes'])} | {'OK' if e['bytes'] <= 10e6 else 'too big — use Content > New item'} |")
-    ao += ["", "## Steps", "",
-           "1. Sign in at arcgis.com (student or organisational account).",
-           "2. **Content > New item > Your device** — add each GeoJSON/CSV; tick *Publish this file as a hosted layer*; give a clear title, summary, tags and terms of use. CSVs need longitude/latitude (already in the points files).",
-           "3. **Map Viewer** > Add > pick your hosted layers. Order: boundaries at the bottom, lines, then points on top. One layer per question — do not stack layers that show the same features.",
-           "4. Style (Styles pane), set pop-ups to a few key fields, and set visible-scale ranges so dense layers only draw when zoomed in.",
-           "5. **Save as** a web map, add a description stating the data dates and sources (see `metadata/dataset_catalogue.csv`).",
-           "6. **Share** the web map **and every layer** it uses (Everyone / your organisation) — otherwise viewers see a blank map.",
-           "7. Open the link in a private window to confirm it loads, then add it to your StoryMap (`storymap/outline.md`).", "",
-           "## Check before sharing publicly", "- Licences: see the `licence` column in `metadata/dataset_catalogue.csv`; credit every publisher.",
-           "- Layers use WGS84 (EPSG:4326), which ArcGIS Online reprojects to Web Mercator for display."]
-    _w(job, "maps/arcgis_online_publish.md", "\n".join(ao))
+    # Final map in ArcGIS Online: live-layer link + upload-ready files + style hints (never blocks the rest of the package)
+    from . import agol
+    try:
+        d["agol"] = agol.build(job)
+    except Exception as e:  # noqa: BLE001
+        d["agol"] = {"error": str(e)}
+        job.log(f"ArcGIS Online map files could not be made: {e}")
 
     # brief + README
     brief = [f"# Project brief — {p['title']}", "", f"**Summary:** {p['summary']}", "", f"**Research question:** {p['question']}", f"**Study area:** {job.region or p['study_area']}",
@@ -259,7 +246,7 @@ def write_all(job):
               "**Status:** data sourced, inspected and organised. **No analysis has been done.**", "",
               "## Folder map", "- `data/raw/` original files exactly as received (never edit)", "- `data/processed/` working copies (GeoJSON/CSV)", "- `data/reference/` study-area boundary",
               "- `metadata/` catalogue, provenance, data dictionary, quality + compatibility reports", "- `workflows/` ArcGIS analysis guide", "- `storymap/` outline and draft skeleton",
-              "- `maps/` ArcGIS Online publish checklist (`arcgis_online_publish.md`); the rest is yours to fill", "- `images/ exports/` yours to fill", "- `logs/` job log and resumable state", "",
+              "- `maps/` ArcGIS Online map: `arcgis_online_publish.md`, `arcgis_online/OPEN_IN_ARCGIS_ONLINE.html` and upload-ready layers", "- `images/ exports/` yours to fill", "- `logs/` job log and resumable state", "",
               "## Start here", "1. Read `metadata/quality_report.md` and `metadata/compatibility_report.md`.", "2. Follow `workflows/analysis_guide.md` in ArcGIS Pro.", "3. Plan your story in `storymap/outline.md`.", "",
               "## Reuse", "Check each dataset's licence in `metadata/dataset_catalogue.csv`; credit publishers in your StoryMap."]
     _w(job, "README.md", "\n".join(readme))

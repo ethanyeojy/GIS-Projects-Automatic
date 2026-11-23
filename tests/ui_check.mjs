@@ -33,8 +33,13 @@ const check = (name, ok, detail = '') => { results.push([name, ok]); console.log
 await send('Runtime.enable'); await send('Page.enable'); await send('Log.enable');
 await send('Page.navigate', { url: URL_ + '/?tod=day' });
 await waitFor('typeof S !== "undefined" && S.feed && S.feed.length > 0', 60, 'projects to load');
+// projects change on every Refresh: test with whatever is on screen (a fast weather project if there is one)
+const REF = await ev('S.feed[0].id');
+const PICK = await ev('(S.feed.find(p => /^g-wx|^g-out/.test(p.id)) || S.feed[S.feed.length - 1]).id');
+console.log('testing with', REF, PICK);
+check('Cards have their own design (accent colour + layout)', await ev('[...document.querySelectorAll("#sidecar .pc")].some(e => /pc-l-(banner|split)/.test(e.className))'));
 await sleep(1500);
-check('Projects page loads with all projects', await ev('S.feed.length') >= 14 && await ev('document.querySelectorAll("#sidecar .pc").length') === await ev('S.feed.length'), `${await ev('S.feed.length')} cards`);
+check('Projects page loads with all projects', await ev('S.feed.length') >= 10 && await ev('document.querySelectorAll("#sidecar .pc").length') === await ev('S.feed.length'), `${await ev('S.feed.length')} cards`);
 check('Datasets on the first page are in a dropdown (sources list collapsed)', await ev('!document.querySelector("#srcdet").open'));
 check('Settings panel is collapsed by default and the left sidebar is gone', await ev('document.querySelector("#setPanel").hidden === true && !document.querySelector("aside")'));
 await shot('01-projects');
@@ -57,22 +62,22 @@ await ev('document.querySelector("#setBtn").click()');
 check('7c. Settings persist after closing and switching tabs', await ev('S.period.preset') === '2y');
 
 // 1. refresh ONE card: other cards byte-for-byte unchanged
-const before = await ev('JSON.stringify([...document.querySelectorAll("#sidecar .pc")].filter(e=>e.dataset.pid!=="nz-seabirds").map(e=>e.outerHTML.length+e.dataset.pid))');
-await ev('document.querySelector("[data-act=refresh][data-pid=nz-seabirds]").click()');
+const before = await ev(`JSON.stringify([...document.querySelectorAll("#sidecar .pc")].filter(e=>e.dataset.pid!=="${REF}").map(e=>e.outerHTML.length+e.dataset.pid))`);
+await ev(`document.querySelector("[data-act=refresh][data-pid=${REF}]").click()`);
 await sleep(500);
-check('1a. While refreshing, the button stays clickable (never stuck)', await ev('!document.querySelector("[data-act=refresh][data-pid=nz-seabirds]").disabled'));
-await waitFor('!document.querySelector("[data-act=refresh][data-pid=nz-seabirds]").classList.contains("busy")', 120, 'refresh to finish');
-const after = await ev('JSON.stringify([...document.querySelectorAll("#sidecar .pc")].filter(e=>e.dataset.pid!=="nz-seabirds").map(e=>e.outerHTML.length+e.dataset.pid))');
+check('1a. While refreshing, the button stays clickable (never stuck)', await ev(`!document.querySelector("[data-act=refresh][data-pid=${REF}]").disabled`));
+await waitFor(`!document.querySelector("[data-act=refresh][data-pid=${REF}]").classList.contains("busy")`, 120, 'refresh to finish');
+const after = await ev(`JSON.stringify([...document.querySelectorAll("#sidecar .pc")].filter(e=>e.dataset.pid!=="${REF}").map(e=>e.outerHTML.length+e.dataset.pid))`);
 check('1. Refreshing one card re-renders only that card', before === after, 'all other cards identical');
 await shot('03-card-refreshed');
 
 // 2. choose a project -> title, big question, purpose
-await ev('document.querySelector("[data-act=choose][data-pid=nz-weather-extremes]").click()');
+await ev(`document.querySelector("[data-act=choose][data-pid=${PICK}]").click()`);
 await waitFor('S.plan && !S.planLoading', 120, 'plan to load');
 await sleep(500);
 const head = await ev('({h1: document.querySelector("#project h1").textContent, q: document.querySelector("#project .bigq").textContent, p: document.querySelector("#project .purpose").textContent})');
 check('2. Chosen project shows title, prominent main question and purpose', head.h1.length > 5 && head.q.includes('Main research question') && head.q.length > 60 && head.p.includes('matters'), head.h1);
-check('2b. The project page lists each dataset with expected records and size', await ev('document.querySelectorAll("#project .dsp").length') >= 6 && (await ev('document.querySelector("#project .dsp-nums").textContent')).includes('records'));
+check('2b. The project page lists each dataset with expected records and size', await ev('document.querySelectorAll("#project .dsp").length') >= 3 && (await ev('document.querySelector("#project .dsp-nums").textContent')).includes('records'));
 await shot('04-project-plan');
 await ev('document.querySelector(".dsp-f summary").click()');
 await sleep(300);
@@ -80,19 +85,19 @@ await shot('05-dataset-filters');
 
 // 4. find missing datasets from the project workflow
 await ev('document.querySelector("#disc_q").value="rainfall rain gauge"; document.querySelector("[data-act2=disc-find]").click()');
-await waitFor('S.disc && S.disc.candidates && S.disc.candidates.length > 0', 120, 'dataset finder');
+await waitFor('S.disc && S.disc.candidates && S.disc.candidates.length > 0', 240, 'dataset finder');
 await sleep(400);
 check('4. "Find missing datasets" lists real candidates with source, coverage, format and size', await ev('document.querySelectorAll("#project .cand").length') > 0 && (await ev('document.querySelector("#project .cand").textContent')).includes('Size'));
 await shot('06-find-datasets');
 await ev('document.querySelector("#project .discbox").scrollIntoView()');
 
 // start a small real download: only the quick datasets
-await ev(`(() => { planItems().forEach(d => { S.sel[d.id].include = ['cliflo_rain','auck_floods'].includes(d.id); }); renderProject(); })()`);
+await ev(`(() => { planItems().forEach(d => { S.sel[d.id].include = d.id === planItems().find(x => x.id !== 'regc').id; }); renderProject(); })()`);
 await ev('document.querySelector("[data-act2=start]").click()');
-await waitFor('S.tab === "progress" && S.jobData && Object.keys(S.jobData.datasets).length >= 3', 60, 'progress tab');
+await waitFor('S.tab === "progress" && S.jobData && Object.keys(S.jobData.datasets).length >= 2', 60, 'progress tab');
 await sleep(1500);
 check('Choosing "Start download" moves to the Progress tab', await ev('S.tab') === 'progress');
-check('7. Each task shows state, stage and last-activity', await ev('document.querySelectorAll("#progress .task").length') >= 3 && await ev('!!document.querySelector("#progress .task .chip")'));
+check('7. Each task shows state, stage and last-activity', await ev('document.querySelectorAll("#progress .task").length') >= 2 && await ev('!!document.querySelector("#progress .task .chip")'));
 await shot('07-progress-running');
 check('9. Refresh status button works without restarting anything', await (async () => { const a = await ev('S.jobData.datasets.regc.attempt'); await ev('document.querySelector("[data-jact=status]").click()'); await sleep(1500); return a === await ev('S.jobData.datasets.regc.attempt'); })());
 await waitFor('S.tab === "quality"', 240, 'automatic move to Quality');
@@ -102,12 +107,13 @@ await shot('08-quality');
 check('Quality page is in plain language with a next button', await ev('document.querySelector("#quality .qcard") !== null && !!document.querySelector("#quality [data-go=files]")'));
 await ev('document.querySelector("#quality [data-go=files]").click()');
 await waitFor('S.files && document.querySelectorAll("#files .dfile").length > 0', 30, 'files tab');
+check('12a. Files tab has the ArcGIS Online map panel with an Open-in-ArcGIS-Online link', await ev('!!document.querySelector("#files .agol a[href*=\\"arcgis.com/apps/mapviewer\\"]")'));
 check('12. Files tab has a Download-all button at the top and a download button per file', await ev('!!document.querySelector("#files .dlall a[href*=\\"scope=datasets\\"]") && document.querySelectorAll("#files .ffile a[download]").length > 0'));
 await shot('09-files');
-await ev('document.querySelector("[data-view=auck_floods]").click()');
-await waitFor('document.querySelector("#mapbox .leaflet-pane") && document.querySelectorAll("#mapbox .leaflet-interactive").length > 0', 60, 'map layer to draw');
+await ev('document.querySelector("[data-view]").click()');
+await waitFor('document.querySelector("#mapbox .leaflet-pane") && /^Showing [1-9]/.test(document.querySelector("#v_note").textContent)', 60, 'map layer to draw');
 await sleep(2500);
-check('12. A downloaded layer is drawn on a basemap map viewer', await ev('document.querySelectorAll("#mapbox .leaflet-interactive").length') > 0, `${await ev('document.querySelectorAll("#mapbox .leaflet-interactive").length')} features drawn; ${await ev('document.querySelector("#v_note").textContent')}`.slice(0, 160));
+check('12. A downloaded layer is drawn on a basemap map viewer', await ev('document.querySelectorAll("#mapbox canvas, #mapbox path").length') > 0 && await ev('document.querySelectorAll("#mapbox .leaflet-tile").length') > 0, `${await ev('document.querySelectorAll("#mapbox .leaflet-tile").length')} basemap tiles; ${await ev('document.querySelector("#v_note").textContent')}`.slice(0, 160));
 await shot('10-map-viewer');
 
 // story

@@ -61,6 +61,15 @@ class Store:
             variants.apply([tuple(x) for x in read_json(os.path.join(state_dir, "projects_selection.json"), [])])
         except Exception:  # noqa: BLE001
             pass
+        # Generated projects (Refresh all) + everything ever shown, so nothing repeats and old jobs still open
+        self.history = set(read_json(os.path.join(state_dir, "project_history.json"), []))
+        self.generated = read_json(os.path.join(state_dir, "generated_projects.json"), {"projects": {}, "current": []})
+        self.generated.setdefault("projects", {})
+        for pid, proj in self.generated["projects"].items():
+            catalog.PROJECT_BY_ID[pid] = proj
+        cur = [catalog.PROJECT_BY_ID[i] for i in self.generated.get("current", []) if i in catalog.PROJECT_BY_ID]
+        if cur:
+            catalog.PROJECTS[:] = cur
         self.refresh_status = {"state": "idle", "message": "No verification has run yet.", "done": 0, "total": 0,
                                "last_finished": None, "log": []}
         self._cancel = threading.Event()
@@ -132,6 +141,8 @@ class Store:
             self.seen.update(p["id"] for p in self.feed() if p["availability"] == "verified")  # what the user has been shown
             self.save()
             self._cancel.clear()
+            # mark it running NOW, so a status check made straight after the click can't see "idle" and stop waiting
+            self.refresh_status.update({"state": "running", "done": 0, "total": 0, "log": [], "message": "Starting a new set of projects…"})
             self._thread = threading.Thread(target=self._refresh, args=(period,), daemon=True)
             self._thread.start()
             return True
@@ -144,68 +155,129 @@ class Store:
         write_json_atomic(os.path.join(self.dir, "projects_selection.json"), sel)
 
     def _refresh(self, period=None):
-        """Refresh all = a completely new set of projects: every template is re-focused on a different region,
-        re-verified live (with that region applied), and only versions that really work are kept."""
-        from . import variants
-        previous = {p.get("region") for p in catalog.PROJECTS if p.get("region")}
-        plan = variants.plan_round(avoid=previous)  # regions used by the last set are avoided, so this set looks different
-        claimed_regions, claimed_urls = set(), set()  # no two projects share a region or an extra dataset
-        for b in catalog.BASES:
-            claimed_urls.update(catalog.DATASETS[d].get("service_url") for d in b["datasets"] if d in catalog.DATASETS)
+        """Refresh all = a brand-new set of projects built from live sources (see generator.py): new topics, regions,
+        questions, photos and card designs. Each is verified live before it is shown; nothing already shown comes back."""
+        import random
+        from collections import Counter
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        from . import generator
+        rng = random.Random()
+        target = sum(n for _, n in generator.QUOTAS)
         with self.lock:
             self.verification = {}
             self.pver = {}
             self.save()
-            self.refresh_status.update({"state": "running", "done": 0, "total": len(plan), "log": []})
-        self._log(f"Building a new set of {len(plan)} projects: each template is re-focused on a different region and checked live (metadata, counts and small samples only — no full downloads).")
+            self.refresh_status.update({"state": "running", "done": 0, "total": target, "log": []})
+        self._log(f"Building a brand-new set of {target} projects from live sources (GBIF species, weather, hazards, DOC, ArcGIS Online) — "
+                  "each is checked live with its region applied; anything you have seen before is skipped.")
         try:
-            def one(item):
-                base, cands = item
-                for region in cands:
+            history = set(self.history) | {p.get("sig") for p in catalog.PROJECTS if p.get("sig")}
+            cands = generator.candidates(self, history, rng, self._cancel)
+            accepted = {f: [] for f, _ in generator.QUOTAS}
+            used_regions = Counter()
+            used_urls = {h.split(":", 1)[1] for h in history if h.startswith("discovered:")}  # never reuse a layer from an earlier refresh
+
+            def next_item(family):
+                with self.lock:
+                    lst = cands[family]
+                    if not lst:
+                        return None
+                    i = min(range(min(len(lst), 25)), key=lambda k: used_regions[lst[k][2]])
+                    item = lst.pop(i)
+                    used_regions[item[2]] += 1  # reserve the region while it is being checked
+                    return item
+
+            def work(fq):
+                family, quota = fq
+                tries = 0
+                while len(accepted[family]) < quota and tries < quota * 5:
                     if self._cancel.is_set():
                         raise Cancelled()
-                    with self.lock:
-                        if region in claimed_regions:
-                            continue
-                        claimed_regions.add(region)
-                    v = variants.make_variant(base, region)
-                    v["datasets"] = list(base["datasets"])  # drop extras found in an earlier round
-                    self._log(f"Verifying: {v['title']}")
-                    card = self.check_project(v["id"], period, region)
-                    ok = card["availability"] == "verified" and card["possible"]
-                    why = "" if ok else " (" + ("; ".join(card["reasons"][:1]) if card["reasons"] else "a file is over your size limit") + ")"
-                    self._log(f"  → {v['title']} — {card['availability'] if ok or card['availability'] != 'verified' else 'too big'}{why[:140]}")
-                    if ok:
-                        self._add_found_dataset(v, region, period, claimed_urls)
+                    item = next_item(family)
+                    if not item:
+                        break
+                    tries += 1
+                    region = item[2]
+                    try:
+                        p = generator.build(self, family, item[1], region, rng, used_urls, self._cancel)
+                    except Cancelled:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        self._log(f"  (skipped a {family} idea: {str(e)[:100]})")
+                        p = None
+                    if not p:
                         with self.lock:
+                            used_regions[region] -= 1
+                        continue
+                    for spec in p["_new_datasets"]:
+                        catalog.DATASETS[spec["id"]] = spec
+                    catalog.PROJECT_BY_ID[p["id"]] = p
+                    self._log(f"Verifying: {p['title']}")
+                    card = self.check_project(p["id"], period, region)
+                    core = self.ver(p["id"], p["datasets"][0]) or {}
+                    enough = (core.get("count") or 0) >= (40 if family == "species" else 1)
+                    ok = card["availability"] == "verified" and card["possible"] and enough
+                    if ok:
+                        why = ""
+                    elif card["reasons"]:
+                        why = " (" + card["reasons"][0] + ")"
+                    elif not card["possible"]:
+                        why = " (too big for your file-size limit)"
+                    else:
+                        why = f" (only {core.get('count') or 0} records in {region})"
+                    shown = "verified" if ok else (card["availability"] if card["availability"] != "verified" else "skipped")
+                    self._log(f"  → {p['title']} — {shown}{why[:150]}")
+                    if ok:
+                        with self.lock:
+                            accepted[family].append(p)
                             self.refresh_status["done"] += 1
-                        return v
-                    with self.lock:
-                        claimed_regions.discard(region)
-                self._log(f"Verifying: {base['title']} (all of New Zealand)")
-                card = self.check_project(base["id"], period, None)
-                self._log(f"  → {base['title']} — {card['availability']}")
-                with self.lock:
-                    self.refresh_status["done"] += 1
-                return base
+                    else:
+                        with self.lock:
+                            used_regions[region] -= 1
+                        catalog.PROJECT_BY_ID.pop(p["id"], None)
+                        self.pver.pop(p["id"], None)
+                        for spec in p["_new_datasets"]:
+                            catalog.DATASETS.pop(spec["id"], None)
 
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                live = list(pool.map(one, plan))
+            with _TPE(max_workers=3) as pool:
+                list(pool.map(work, generator.QUOTAS))
+            # interleave families so the list is varied, then give each card its own photos + design
+            order, live = [list(accepted[f]) for f, _ in generator.QUOTAS], []
+            while any(order):
+                for lst in order:
+                    if lst:
+                        live.append(lst.pop(0))
+            if not live:
+                raise RuntimeError("no new project passed its live checks — check your internet connection and try again")
+            self._log(f"Finding photos and designing {len(live)} project cards…")
+            accents = list(generator.ACCENTS)
+            rng.shuffle(accents)
+            used_photos = set()
+            for i, p in enumerate(live):
+                if self._cancel.is_set():
+                    raise Cancelled()
+                for spec in p["_new_datasets"]:
+                    self.add_custom(spec)
+                p["sig"] = p.pop("_sig")
+                generator.finish(p, used_photos, {"accent": accents[i % len(accents)], "layout": generator.LAYOUTS[i % len(generator.LAYOUTS)]}, self._cancel)
             catalog.PROJECTS[:] = live
             with self.lock:
-                self._save_selection()
+                self.history |= {p["sig"] for p in live}
+                self.generated["projects"].update({p["id"]: p for p in live})
+                self.generated["current"] = [p["id"] for p in live]
+                write_json_atomic(os.path.join(self.dir, "generated_projects.json"), self.generated)
+                write_json_atomic(os.path.join(self.dir, "project_history.json"), sorted(self.history))
                 self.save()
                 self.refresh_status.update({"state": "done", "last_finished": connectors.now_iso()})
-            n_ok = sum(1 for p in self.feed(period) if p["availability"] == "verified")
-            self._log(f"Finished: {n_ok} of {len(live)} new projects are fully verified.")
+            self._log(f"Finished: {len(live)} brand-new projects, all verified live: " + "; ".join(p["title"] for p in live))
         except Cancelled:
             with self.lock:
                 self.refresh_status["state"] = "cancelled"
-            self._log("Refresh cancelled.")
+            self._log("Refresh cancelled — your previous projects are unchanged.")
         except Exception as e:  # noqa: BLE001
             with self.lock:
                 self.refresh_status["state"] = "error"
-            self._log(f"Refresh failed: {e}")
+            self._log(f"Refresh failed: {e} — your previous projects are unchanged.")
 
     def _add_found_dataset(self, v, region, period, claimed_urls):
         """Search ArcGIS Online again for ONE extra dataset for this regional project. It is only added if it is a public

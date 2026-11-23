@@ -223,7 +223,7 @@ def find(store, project, query="", region=None, period=None, mode="search", canc
             i, r = item
             spec = {"id": "tmp", "role": "optional", "connector": "arcgis", "name": r["title"], "publisher": r["owner"], "service_url": r["url"], "landing_url": r["url"]}
             try:
-                return r["url"], connectors.make_source(spec).verify(bbox=store.region_bbox(region) if region else None, cancel=cancel)
+                return r["url"], connectors.verify_within(spec, 40, bbox=store.region_bbox(region) if region else None, cancel=cancel)
             except Exception as e:  # noqa: BLE001
                 return r["url"], {"status": "incomplete", "checks": [{"name": "Verification", "ok": False, "detail": str(e)[:120]}], "count": None, "est_bytes": None}
         for url, v in pool.map(verify_one, agol):

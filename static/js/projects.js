@@ -32,13 +32,13 @@ function tsItem(d, pid, taskJob) {
 }
 function coverOf(p) {
   const im = (p.case_study && p.case_study.images || [])[0]; if (!im) return '';
-  return `<div class="pc-imgwrap"><img class="pc-img" src="${esc(im.url.replace('/1920px-', '/960px-'))}" alt="${esc(im.alt)}" loading="lazy"><span class="pc-cred">Photo: ${esc(im.credit)} · ${esc(im.licence)}</span></div>`;
+  return `<div class="pc-imgwrap"><img class="pc-img" src="${esc(im.thumb || im.url.replace('/1920px-', '/960px-'))}" alt="${esc(im.alt)}" loading="lazy"><span class="pc-cred">Photo: ${esc(im.credit)} · ${esc(im.licence)}</span></div>`;
 }
 const keepOpen = k => S.expanded.has(k) ? 'open' : '';
 function cardHtml(p) {
-  const busy = isBusy('card:' + p.id), tb = isBusy('trouble:' + p.id), reg = S.filters.region, col = THEME_COL[p.theme] || 'var(--acc)';
+  const busy = isBusy('card:' + p.id), tb = isBusy('trouble:' + p.id), reg = S.filters.region, col = (p.design && p.design.accent) || THEME_COL[p.theme] || 'var(--acc)', lay = (p.design && p.design.layout) || 'photo';
   const per = S.periodInfo ? `${S.periodInfo.start} → ${S.periodInfo.end}` : '';
-  return `<article class="pc" data-pid="${esc(p.id)}" style="--tc:${col}">${coverOf(p)}
+  return `<article class="pc pc-l-${esc(lay)}" data-pid="${esc(p.id)}" style="--tc:${col}">${coverOf(p)}
    <div class="pc-top"><span class="pc-ico">${p.icon || '🗺️'}</span><h3>${esc(p.title)}</h3></div>
    <p class="pc-desc">${esc(p.summary)}</p>
    <div class="row">${p.region ? `<span class="chip ok">📍 ${esc(p.region)}</span>` : '<span class="chip">📍 All of NZ</span>'}<span class="chip">${esc(THEME_LBL[p.theme] || p.theme)}</span><span class="chip">${esc(p.difficulty)}</span><span class="chip">≈${p.workload_h[0]}–${p.workload_h[1]} h</span>

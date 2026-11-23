@@ -386,9 +386,14 @@ function renderQuality() {
 let MAP = null, OVERLAY = null, REGION_LAYER = null;
 async function loadFiles() {
   const el = $('#files'); if (!S.folderSlug) { el.innerHTML = '<div class="banner info">Start a project to see its files.</div>'; return; }
+  const token = S.filesToken = (S.filesToken || 0) + 1;  // only the newest load may redraw the page
   try {
     const [ds, tree] = await Promise.all([api(`/api/projects/${encodeURIComponent(S.folderSlug)}/datasets`), api(`/api/projects/${encodeURIComponent(S.folderSlug)}/tree`)]);
-    S.files = { ds: ds.datasets, tree }; renderFiles();
+    let agol = null; try { agol = await api(`/api/projects/${encodeURIComponent(S.folderSlug)}/agol`); } catch (e) { agol = { error: e.message }; }
+    if (token !== S.filesToken) return;
+    // never wipe a map the user has just opened: if the viewer is showing, keep it and refresh the rest later
+    if (MAP && S.files && $('#viewer') && $('#viewer').style.display !== 'none') { S.files = { ds: ds.datasets, tree, agol }; return; }
+    S.files = { ds: ds.datasets, tree, agol }; renderFiles();
   } catch (e) { el.innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
 }
 function renderFiles() {
@@ -399,6 +404,7 @@ function renderFiles() {
   el.innerHTML = `<div class="projhead small-head"><h1>Files &amp; maps</h1><p class="purpose">Download each dataset on its own, or everything at once. Click <b>View on map</b> to check a dataset on a basemap before you use it.</p></div>
    <div class="card dlall"><div><b>${done.length}</b> dataset(s) ready</div><div class="row"><a class="btn primary big" href="/api/projects/${slug}/zip?scope=datasets" download>⬇ Download all datasets (.zip)</a>
     <a class="btn" href="/api/projects/${slug}/zip?scope=project" download>Download whole project folder (.zip)</a></div></div>
+   ${agolHtml(f.agol, dl)}
    <div id="viewer" class="viewer" style="display:none"><div class="viewer-h"><b id="v_title"></b><span class="small mut" id="v_note"></span><label class="chk small"><input type="checkbox" id="v_regions"> Show regional council outlines</label><button id="v_close">Close ×</button></div><div id="mapbox"></div><div id="tablebox"></div></div>
    ${f.ds.map(d => `<div class="dfile ${d.state}"><div class="dfile-top"><div><b>${esc(d.id === 'regc' ? 'Study-area boundaries' : d.name)}</b> <span class="chip ${STATE_CLS[d.state]}">${STATE_LBL[d.state]}</span>
       <div class="small mut">${esc(d.publisher)} · ${fmtN(d.records)} records</div></div>
@@ -411,6 +417,21 @@ function renderFiles() {
   $('#v_regions').onchange = e => toggleRegions(e.target.checked);
   $$('[data-view]').forEach(b => b.onclick = () => viewLayer(b.dataset.view));
   $$('[data-table]').forEach(b => b.onclick = () => viewTable(b.dataset.table));
+}
+function agolHtml(a, dl) {
+  if (!a) return '';
+  if (a.error) return `<div class="card agol"><h2>🌏 Final map in ArcGIS Online</h2><div class="banner bad small">The map files could not be made: ${esc(a.error)}</div></div>`;
+  const style = s => !s ? 'keep one symbol' : `Styles → <b>${esc(s.field)}</b> → ${esc(s.how)}${s.values ? ' (' + s.values.slice(0, 6).map(esc).join(', ') + ')' : ''}`;
+  const ups = (a.uploads || []).filter(u => u.recommended), extra = (a.uploads || []).filter(u => !u.recommended);
+  return `<div class="card agol"><h2>🌏 Final map in ArcGIS Online</h2>
+   <p class="small">Works with your <b>school login</b>: the button opens Map Viewer, you sign in as usual, and the live layers appear <b>with their legends</b>. Then add the files below and press <b>Save</b>.</p>
+   <div class="row">${a.mapviewer_link ? `<a class="btn primary big" href="${esc(a.mapviewer_link)}" target="_blank" rel="noopener">① Open in ArcGIS Online (${a.live_layers.length} live layer${a.live_layers.length === 1 ? '' : 's'})</a>` : '<a class="btn primary big" href="https://www.arcgis.com/apps/mapviewer/index.html" target="_blank" rel="noopener">① Open ArcGIS Online Map Viewer</a>'}
+    ${dl('maps/arcgis_online_publish.md', 'Step-by-step guide')}</div>
+   ${a.live_layers && a.live_layers.length ? `<div class="small mut" style="margin-top:6px">Live layers: ${a.live_layers.map(x => esc(x.name)).join(' · ')}</div>` : ''}
+   ${ups.length ? `<h3 style="margin-top:12px">② Add these files (Map Viewer → Add → Add layer from file)</h3>${ups.map(u => `<div class="ffile"><span class="fmt">GEOJSON</span><div><b>${esc(u.name)}</b><div class="small mut">${fmtB(u.bytes)} · ${fmtN(u.features)} features · ${esc(u.how_to_add)}</div><div class="small">③ Legend: ${style(u.style)}</div>${u.why ? `<div class="small mut">${esc(u.why)}</div>` : ''}</div>${dl(u.file, '⬇ Download')}</div>`).join('')}` : '<div class="small mut" style="margin-top:8px">② Nothing to upload — every layer is live.</div>'}
+   ${extra.length ? `<details class="small"><summary>Optional: your filtered copies of the live layers (${extra.length})</summary>${extra.map(u => `<div class="ffile"><div><b>${esc(u.name)}</b><div class="small mut">${fmtB(u.bytes)} · ${esc(u.how_to_add)}</div></div>${dl(u.file, '⬇')}</div>`).join('')}</details>` : ''}
+   ${(a.notes || []).map(n => `<div class="small mut">• ${esc(n)}</div>`).join('')}
+   <div class="small mut" style="margin-top:8px">④ Save the map, then Share it <b>and</b> every uploaded layer at the same level — a shared map with private layers looks blank to others.</div></div>`;
 }
 const propsTable = p => '<table class="pp">' + Object.entries(p || {}).slice(0, 12).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v ?? ''))}</td></tr>`).join('') + '</table>';
 function ensureMap() {
@@ -440,7 +461,7 @@ async function viewLayer(ds) {
     OVERLAY = geoLayer(fc, '#e87a3d').addTo(map);
     const b = OVERLAY.getBounds(); if (b.isValid()) map.fitBounds(b.pad(0.1), { maxZoom: 12 });
     const m = fc.meta; $('#v_note').textContent = `Showing ${fmtN(m.shown)} of ${fmtN(m.with_geometry)} features with a location (${m.geometry_types.join(', ').toLowerCase()})${m.sampled || m.simplified ? ' — thinned for the browser; the files you download are complete' : ''}. Click a feature to see its attributes.`;
-    setTimeout(() => map.invalidateSize(), 150);
+    setTimeout(() => { if (MAP === map) map.invalidateSize(); }, 150);
     if (!navigator.onLine) toast('You appear to be offline: the layer draws, but the basemap tiles need internet.', 'bad');
   });
 }

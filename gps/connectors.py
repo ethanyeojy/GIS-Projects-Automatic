@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from . import net, timeperiod
@@ -187,8 +188,10 @@ def write_parts(items, raw_path, limit, wrap):
                 raise SizeExceeded(len(body), limit)
             size_n = max(1, size_n // 2)
         path = f"{base}_part{k:03d}{ext}"
-        with open(path, "wb") as f:
+        tmp = f"{path}.{threading.get_ident()}.tmp"
+        with open(tmp, "wb") as f:
             f.write(body)
+        os.replace(tmp, path)
         parts.append({"file": os.path.basename(path), "bytes": len(body), "sha256": sha256_file(path)})
         i += len(chunk)
         k += 1
@@ -207,14 +210,20 @@ class ArcGISSource:
     def _get(self, url, params, cancel=None, on_bytes=None):
         p = dict(params)
         p.setdefault("f", "json")
-        try:
-            st, js = net.get_json(url, p, cancel=cancel, on_bytes=on_bytes)
-        except NetError as e:
-            if e.status in (401, 403):
-                raise AuthRequired(f"HTTP {e.status} from service")
-            raise
-        raise_esri_error(js)
-        return js
+        for attempt in range(4):
+            try:
+                st, js = net.get_json(url, p, cancel=cancel, on_bytes=on_bytes)
+                raise_esri_error(js)
+                return js
+            except AuthRequired:
+                raise
+            except NetError as e:
+                if e.status in (401, 403):
+                    raise AuthRequired(f"HTTP {e.status} from service")
+                busy = re.search(r"(Unable to perform query|error (500|502|503|504)|timed? ?out|Network error)", str(e), re.I)
+                if not busy or attempt == 3:
+                    raise
+                net._sleep((4, 10, 20)[attempt], cancel)  # the server is busy: give it a moment, then ask again
 
     def resolve(self, cancel=None):
         if self._layer_url:
@@ -278,6 +287,8 @@ class ArcGISSource:
     def _query(self, url, meta, extra, bbox, cancel=None, where=None, on_bytes=None):
         fmt = self._fmt(meta)
         p = {"where": where or self.spec.get("where", "1=1"), "outFields": "*", "outSR": "4326", "f": fmt}
+        if self.spec.get("simplify_m"):  # very large modelled layers: the server simplifies shapes (documented in warnings)
+            p.update(maxAllowableOffset=round(self.spec["simplify_m"] / 111_000, 7), geometryPrecision=6)
         p.update(self._geom_params(bbox))
         p.update(extra)
         js = self._get(url + "/query", p, cancel, on_bytes)
@@ -391,7 +402,9 @@ class ArcGISSource:
             ids = (js.get("objectIds") or [])[: cap_n or None]
             warnings.append("Service does not support pagination; fetched by object-ID batches.")
         n_pages = (total + page - 1) // page
-        for i in range(n_pages):
+        fmt_box = {}
+
+        def fetch(i):
             if cancel.is_set():
                 raise Cancelled()
             cp = os.path.join(ctx["checkpoint_dir"], f"page_{i:06d}.json")
@@ -405,29 +418,43 @@ class ArcGISSource:
                 else:
                     batch = ids[i * page:(i + 1) * page]
                     extra = {"objectIds": ",".join(map(str, batch))}
-                fc, _, fmt_used = self._query(url, meta, extra, None if not paginated else bbox, cancel, where,
-                                              on_bytes=lambda n, i=i: progress(message=f"page {i + 1}/{n_pages}: receiving {n / 1e6:.1f} MB"))
+                fc, _, fmt_box["fmt"] = self._query(url, meta, extra, None if not paginated else bbox, cancel, where,
+                                                    on_bytes=lambda n, i=i: progress(message=f"page {i + 1}/{n_pages}: receiving {n / 1e6:.1f} MB"))
                 _cp_save(cp, fc)
-            feats.extend(fc.get("features", []))
-            nbytes += os.path.getsize(cp)
-            progress(records=len(feats), total=total, bytes=nbytes, message=f"page {i + 1}/{n_pages}")
-            if limit and not split and not allow and nbytes > limit:
-                raise SizeExceeded(nbytes, limit)
-            if not fc.get("features"):
-                warnings.append(f"Empty page at offset {i * page}; stopping early.")
-                break
+            return i, cp, fc
+
+        # up to 3 pages in flight at once (still polite: requests to one host stay throttled); results are used strictly in order
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(max_workers=3 if n_pages >= 4 else 1)
+        try:
+            for i, cp, fc in pool.map(fetch, range(n_pages)):
+                feats.extend(fc.get("features", []))
+                nbytes += os.path.getsize(cp)
+                progress(records=len(feats), total=total, bytes=nbytes, message=f"page {i + 1}/{n_pages}")
+                if limit and not split and not allow and nbytes > limit:
+                    raise SizeExceeded(nbytes, limit)
+                if not fc.get("features"):
+                    warnings.append(f"Empty page at offset {i * page}; stopping early.")
+                    break
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        fmt_used = fmt_used or fmt_box.get("fmt")
         if len(feats) != total:
             warnings.append(f"Fetched {len(feats)} features but the query reported {total}.")
+        if self.spec.get("simplify_m"):
+            warnings.append(f"Shapes were simplified by the server to about {self.spec['simplify_m']} m (maxAllowableOffset) so the file stays usable — "
+                            "fine for regional maps and area totals; not for property-level detail.")
         if cap_n:
             warnings.append(f"Kept the first {cap_n:,} features in the service's own order (as you chose); not a random sample.")
         out = ctx["raw_path"]
         if split and limit:
-            raw_files = write_parts(feats, out, limit, lambda ch: {"type": "FeatureCollection", "features": ch})
+            with heartbeat(progress, "splitting into files"):
+                raw_files = write_parts(feats, out, limit, lambda ch: {"type": "FeatureCollection", "features": ch})
             if len(raw_files) > 1:
                 warnings.append(f"Split into {len(raw_files)} files of at most {limit / 1e6:.0f} MB each (as you chose).")
         else:
-            with open(out, "w", encoding="utf-8") as f:
-                json.dump({"type": "FeatureCollection", "features": feats}, f, separators=(",", ":"))
+            with heartbeat(progress, f"merging {len(feats):,} features into one file"):
+                write_json_file(out, {"type": "FeatureCollection", "features": feats})
             size = os.path.getsize(out)
             if limit and not allow and size > limit:
                 os.remove(out)
@@ -446,6 +473,69 @@ class ArcGISSource:
             with open(os.path.join(base_dir, rf["file"]), "r", encoding="utf-8") as f:
                 feats.extend(json.load(f).get("features", []))
         return {"type": "FeatureCollection", "features": feats}
+
+
+class heartbeat:
+    """with heartbeat(progress, "merging pages"): ...  -> reports activity every 15 s while the block runs."""
+
+    def __init__(self, progress, msg, every=15):
+        self.progress, self.msg, self.every = progress, msg, every
+        self._stop = threading.Event()
+
+    def __enter__(self):
+        def beat():
+            n = 0
+            while not self._stop.wait(self.every):
+                n += self.every
+                try:
+                    self.progress(message=f"{self.msg}… ({n}s)")
+                except Exception:  # noqa: BLE001
+                    pass
+        self._t = threading.Thread(target=beat, daemon=True)
+        self._t.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        return False
+
+
+def write_json_file(path, obj):
+    """Write JSON all-or-nothing (temp file + rename): a stopped or superseded attempt can never leave half a file."""
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def verify_within(spec, seconds, bbox=None, cancel=None, opts=None):
+    """Live-check a source, but stop WAITING after `seconds`: some services trickle data so slowly (or wait so long before
+    answering) that no single read times out, which would otherwise hang the dataset finder or a refresh. The slow check
+    is told to stop and finishes quietly in the background."""
+    stop = threading.Event()
+    box = {}
+
+    def run():
+        try:
+            box["res"] = make_source(spec).verify(bbox=bbox, cancel=stop, opts=opts)
+        except Exception as e:  # noqa: BLE001
+            box["err"] = e
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    end = time.time() + seconds
+    while t.is_alive() and time.time() < end:
+        t.join(0.25)
+        if cancel is not None and cancel.is_set():
+            stop.set()
+            raise Cancelled()
+    if "res" in box:
+        return box["res"]
+    stop.set()
+    if isinstance(box.get("err"), Exception) and not isinstance(box["err"], Cancelled):
+        raise box["err"]
+    res = new_result(spec)
+    check(res, "Live check finished in time", False, f"the service was too slow to answer (over {seconds} s) — it may still work later")
+    return finish(res)
 
 
 def _cp_load(cp):
@@ -1083,6 +1173,25 @@ class OpenMeteo:
                 except NetError as ex:
                     avail[tag] = {"window": f"{a} → {b}", "error": str(ex)[:160]}
             ok_any = any(v.get("non_null", 0) > 0 for v in avail.values())
+            first_avail = None
+            if avail.get("start", {}).get("non_null") == 0 and avail.get("end", {}).get("non_null", 0) > 0:
+                # values exist at the end but not the start: find roughly where they begin (a few 30-day probes)
+                lo, hi = sd, last_start
+                for _ in range(9):
+                    if (hi - lo).days <= 31:
+                        break
+                    mid = lo + (hi - lo) / 2
+                    try:
+                        st, js = self._req(locs[0], mid.isoformat(), (mid + td(days=29)).isoformat(), variables[:1], cancel)
+                        vals = (js.get("daily") or js.get("hourly") or {}).get(variables[0], [])
+                        has = any(v is not None for v in vals)
+                    except NetError:
+                        break
+                    if has:
+                        hi = mid
+                    else:
+                        lo = mid + td(days=30)
+                first_avail = hi.isoformat()
             check(res, "Weather service reachable", all("error" not in v for v in avail.values()) or ok_any,
                   "; ".join(f"{k} {v['window']}: " + (v.get("error") or f"{v['non_null']}/{v['values']} values") for k, v in avail.items()))
             check(res, "Data exists in your time period", ok_any, "no values returned for the start or end of your period" if not ok_any else "values present")
@@ -1096,7 +1205,7 @@ class OpenMeteo:
             res["fields"] = [{"name": v, "type": "", "alias": ""} for v in ["location", "region", "date"] + variables]
             res["licence"] = "Open-Meteo: CC BY 4.0 data, free for non-commercial use (attribute Open-Meteo.com; ERA5 / CAMS source data)"
             res["licence_verified"] = False
-            res["time_info"] = {"availability": avail, "period": per["text"]}
+            res["time_info"] = {"availability": avail, "period": per["text"], "first_available": first_avail}
             res["notes"].append("Values are model/reanalysis output for the nearest grid cell, not a weather-station reading.")
             return finish(res)
         except (Cancelled, SizeExceeded):

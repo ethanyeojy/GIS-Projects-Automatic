@@ -27,6 +27,14 @@ def info(spec, period, verification=None):
             good = {k: v.get("non_null", 0) > 0 for k, v in av.items()}
             if all(good.values()):
                 return {"status": "ok", "note": f"Values returned at both the start and the end of {s} → {e}."}
+            if any(good.values()) and ti.get("first_available"):
+                fa = ti["first_available"]
+                try:
+                    share = (date.fromisoformat(fa) - date.fromisoformat(s)).days / max(1, (date.fromisoformat(e) - date.fromisoformat(s)).days)
+                except ValueError:
+                    share = 0
+                return {"status": "partial", "first_available": fa,
+                        "note": f"Values only start around {fa} — about {share:.0%} of {s} → {e} (the start) has no data from this service."}
             if any(good.values()):
                 missing = [f"{k} ({av[k]['window']})" for k, g in good.items() if not g]
                 return {"status": "partial", "note": "No values returned for: " + ", ".join(missing) + ". This service does not cover that part of your period."}

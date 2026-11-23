@@ -104,6 +104,7 @@ function bindSettings() {
   $('#t_preset').value = S.period.preset;
   $('#t_preset').onchange = () => {
     S.period.preset = $('#t_preset').value;
+    $('#t_custom').style.display = S.period.preset === 'custom' ? '' : 'none';  // show/hide the date pickers straight away
     if (S.period.preset === 'custom' && !S.period.start) { S.period.start = $('#t_start').value = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10); S.period.end = $('#t_end').value = new Date().toISOString().slice(0, 10); }
     onPeriodChanged();
   };

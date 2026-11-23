@@ -390,3 +390,22 @@ def temporal_summary(inspections):
             if v.get("min"):
                 out[f"{ds}.{k}"] = [v["min"], v["max"]]
     return out
+
+
+def series_coverage(fc):
+    """For daily time-series tables (a 'date' column + number columns): the REAL span of days that have values, per column.
+    Catches gaps a start/end spot-check can't see (e.g. a 10-year request where values only exist for the last 4 years)."""
+    feats = fc.get("features", [])
+    if not feats or "date" not in (feats[0].get("properties") or {}):
+        return []
+    cols = [k for k, v in (feats[0].get("properties") or {}).items() if k != "date" and (v is None or isinstance(v, (int, float)))]
+    out = []
+    for k in cols:
+        dates = [f["properties"]["date"] for f in feats if isinstance(f["properties"].get(k), (int, float))]
+        if not dates:
+            out.append(f"'{k}' has no values at all for your period.")
+            continue
+        share = len(dates) / len(feats)
+        if share < 0.95:
+            out.append(f"'{k}' only has values from {min(dates)} to {max(dates)} ({share:.0%} of rows); the rest of your period is empty for this column.")
+    return out
